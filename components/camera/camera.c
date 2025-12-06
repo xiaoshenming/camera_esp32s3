@@ -1,12 +1,88 @@
 #include "camera.h"
 #include "esp_log.h"
+#include "esp_camera.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
+#include "lcd.h"
 
 static const char *TAG = "camera";
+
+// 摄像头引脚定义
+#define CAMERA_PIN_PWDN -1
+#define CAMERA_PIN_RESET -1
+#define CAMERA_PIN_XCLK 5
+#define CAMERA_PIN_SIOD 1
+#define CAMERA_PIN_SIOC 2
+
+#define CAMERA_PIN_D7 9
+#define CAMERA_PIN_D6 4
+#define CAMERA_PIN_D5 6
+#define CAMERA_PIN_D4 15
+#define CAMERA_PIN_D3 17
+#define CAMERA_PIN_D2 8
+#define CAMERA_PIN_D1 18
+#define CAMERA_PIN_D0 16
+#define CAMERA_PIN_VSYNC 3
+#define CAMERA_PIN_HREF 46
+#define CAMERA_PIN_PCLK 7
+
+#define XCLK_FREQ_HZ 24000000
+
+// LCD显示队列句柄
+static QueueHandle_t xQueueLCDFrame = NULL;
+static TaskHandle_t camera_task_handle = NULL;
+static TaskHandle_t lcd_task_handle = NULL;
+static bool display_running = false;
 
 bool camera_init(void)
 {
     ESP_LOGI(TAG, "Initializing camera...");
-    // TODO: 实现摄像头初始化逻辑
+    
+    // 打开摄像头电源
+    lcd_dvp_pwdn(0);
+    
+    camera_config_t config;
+    config.ledc_channel = LEDC_CHANNEL_1;
+    config.ledc_timer = LEDC_TIMER_1;
+    config.pin_d0 = CAMERA_PIN_D0;
+    config.pin_d1 = CAMERA_PIN_D1;
+    config.pin_d2 = CAMERA_PIN_D2;
+    config.pin_d3 = CAMERA_PIN_D3;
+    config.pin_d4 = CAMERA_PIN_D4;
+    config.pin_d5 = CAMERA_PIN_D5;
+    config.pin_d6 = CAMERA_PIN_D6;
+    config.pin_d7 = CAMERA_PIN_D7;
+    config.pin_xclk = CAMERA_PIN_XCLK;
+    config.pin_pclk = CAMERA_PIN_PCLK;
+    config.pin_vsync = CAMERA_PIN_VSYNC;
+    config.pin_href = CAMERA_PIN_HREF;
+    config.pin_sccb_sda = CAMERA_PIN_SIOD;   // 使用SDA引脚
+    config.pin_sccb_scl = CAMERA_PIN_SIOC;   // 使用SCL引脚
+    config.sccb_i2c_port = 0;                // 使用I2C端口0
+    config.pin_pwdn = CAMERA_PIN_PWDN;
+    config.pin_reset = CAMERA_PIN_RESET;
+    config.xclk_freq_hz = XCLK_FREQ_HZ;
+    config.pixel_format = PIXFORMAT_RGB565;
+    config.frame_size = FRAMESIZE_QVGA;
+    config.jpeg_quality = 12;
+    config.fb_count = 2;
+    config.fb_location = CAMERA_FB_IN_PSRAM;
+    config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+
+    // 摄像头初始化
+    esp_err_t err = esp_camera_init(&config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Camera init failed with error 0x%x", err);
+        return false;
+    }
+
+    sensor_t *s = esp_camera_sensor_get(); // 获取摄像头型号
+    if (s->id.PID == GC0308_PID) {
+        s->set_hmirror(s, 1);  // 摄像头镜像
+    }
+    
+    ESP_LOGI(TAG, "Camera initialized successfully");
     return true;
 }
 
@@ -22,4 +98,144 @@ uint8_t* camera_get_image_data(void)
     ESP_LOGI(TAG, "Getting image data...");
     // TODO: 实现获取图像数据逻辑
     return NULL;
+}
+
+// LCD处理任务
+static void camera_lcd_task(void *arg)
+{
+    camera_fb_t *frame = NULL;
+    
+    ESP_LOGI(TAG, "LCD display task started");
+    
+    while (display_running) {
+        if (xQueueReceive(xQueueLCDFrame, &frame, pdMS_TO_TICKS(100))) {
+            if (frame) {
+                // 显示摄像头帧到LCD
+                lcd_draw_camera_frame(0, 0, frame->width, frame->height, frame->buf);
+                esp_camera_fb_return(frame);
+            }
+        }
+    }
+    
+    ESP_LOGI(TAG, "LCD display task stopped");
+    vTaskDelete(NULL);
+}
+
+// 摄像头处理任务
+static void camera_capture_task(void *arg)
+{
+    ESP_LOGI(TAG, "Camera capture task started");
+    
+    while (display_running) {
+        camera_fb_t *frame = esp_camera_fb_get();
+        if (frame) {
+            // 将帧发送到LCD显示队列
+            if (!xQueueSend(xQueueLCDFrame, &frame, pdMS_TO_TICKS(10))) {
+                // 如果队列满了，释放帧
+                esp_camera_fb_return(frame);
+            }
+        } else {
+            ESP_LOGW(TAG, "Failed to get camera frame");
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+    }
+    
+    ESP_LOGI(TAG, "Camera capture task stopped");
+    vTaskDelete(NULL);
+}
+
+// 启动摄像头到LCD的实时显示
+bool camera_start_lcd_display(void)
+{
+    if (display_running) {
+        ESP_LOGW(TAG, "Camera LCD display already running");
+        return true;
+    }
+    
+    ESP_LOGI(TAG, "Starting camera LCD display...");
+    
+    // 创建LCD显示队列
+    xQueueLCDFrame = xQueueCreate(2, sizeof(camera_fb_t *));
+    if (xQueueLCDFrame == NULL) {
+        ESP_LOGE(TAG, "Failed to create LCD frame queue");
+        return false;
+    }
+    
+    display_running = true;
+    
+    // 创建摄像头捕获任务
+    BaseType_t ret = xTaskCreatePinnedToCore(
+        camera_capture_task, 
+        "camera_capture", 
+        3 * 1024, 
+        NULL, 
+        5, 
+        &camera_task_handle, 
+        1
+    );
+    
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create camera capture task");
+        display_running = false;
+        vQueueDelete(xQueueLCDFrame);
+        xQueueLCDFrame = NULL;
+        return false;
+    }
+    
+    // 创建LCD显示任务
+    ret = xTaskCreatePinnedToCore(
+        camera_lcd_task, 
+        "camera_lcd", 
+        4 * 1024, 
+        NULL, 
+        5, 
+        &lcd_task_handle, 
+        0
+    );
+    
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create LCD display task");
+        display_running = false;
+        vTaskDelete(camera_task_handle);
+        camera_task_handle = NULL;
+        vQueueDelete(xQueueLCDFrame);
+        xQueueLCDFrame = NULL;
+        return false;
+    }
+    
+    ESP_LOGI(TAG, "Camera LCD display started successfully");
+    return true;
+}
+
+// 停止摄像头到LCD的显示
+bool camera_stop_lcd_display(void)
+{
+    if (!display_running) {
+        ESP_LOGW(TAG, "Camera LCD display not running");
+        return true;
+    }
+    
+    ESP_LOGI(TAG, "Stopping camera LCD display...");
+    
+    display_running = false;
+    
+    // 等待任务结束
+    if (camera_task_handle) {
+        vTaskDelete(camera_task_handle);
+        camera_task_handle = NULL;
+    }
+    
+    if (lcd_task_handle) {
+        vTaskDelete(lcd_task_handle);
+        lcd_task_handle = NULL;
+    }
+    
+    // 清理队列
+    if (xQueueLCDFrame) {
+        vQueueDelete(xQueueLCDFrame);
+        xQueueLCDFrame = NULL;
+    }
+    
+    ESP_LOGI(TAG, "Camera LCD display stopped successfully");
+    return true;
 }

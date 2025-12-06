@@ -29,6 +29,18 @@ bool camera_capture(void);
  */
 uint8_t* camera_get_image_data(void);
 
+/**
+ * @brief 启动摄像头到LCD的实时显示
+ * @return true 成功，false 失败
+ */
+bool camera_start_lcd_display(void);
+
+/**
+ * @brief 停止摄像头到LCD的显示
+ * @return true 成功，false 失败
+ */
+bool camera_stop_lcd_display(void);
+
 #ifdef __cplusplus
 }
 #endif
