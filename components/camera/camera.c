@@ -42,6 +42,9 @@ bool camera_init(void)
     // 打开摄像头电源
     lcd_dvp_pwdn(0);
     
+    // 等待摄像头电源稳定
+    vTaskDelay(pdMS_TO_TICKS(100));
+    
     camera_config_t config;
     config.ledc_channel = LEDC_CHANNEL_1;
     config.ledc_timer = LEDC_TIMER_1;
@@ -57,16 +60,16 @@ bool camera_init(void)
     config.pin_pclk = CAMERA_PIN_PCLK;
     config.pin_vsync = CAMERA_PIN_VSYNC;
     config.pin_href = CAMERA_PIN_HREF;
-    config.pin_sccb_sda = CAMERA_PIN_SIOD;   // 使用SDA引脚
+    config.pin_sccb_sda = -1;                // 使用已初始化的I2C接口
     config.pin_sccb_scl = CAMERA_PIN_SIOC;   // 使用SCL引脚
     config.sccb_i2c_port = 0;                // 使用I2C端口0
     config.pin_pwdn = CAMERA_PIN_PWDN;
     config.pin_reset = CAMERA_PIN_RESET;
     config.xclk_freq_hz = XCLK_FREQ_HZ;
     config.pixel_format = PIXFORMAT_RGB565;
-    config.frame_size = FRAMESIZE_QVGA;
+    config.frame_size = FRAMESIZE_QQVGA;  // 减小帧尺寸到160x120
     config.jpeg_quality = 12;
-    config.fb_count = 2;
+    config.fb_count = 1;  // 减少帧缓冲区数量
     config.fb_location = CAMERA_FB_IN_PSRAM;
     config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
 

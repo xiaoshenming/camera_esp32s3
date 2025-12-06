@@ -23,15 +23,15 @@ void app_main(void)
         return;
     }
     
-    // 初始化摄像头组件（摄像头会使用已初始化的I2C总线）
-    if (!camera_init()) {
-        ESP_LOGE("main", "Camera initialization failed");
+    // 初始化IO扩展芯片（必须在摄像头初始化之前，因为摄像头电源由PCA9557控制）
+    if (!lcd_pca9557_init()) {
+        ESP_LOGE("main", "PCA9557 initialization failed");
         return;
     }
     
-    // 初始化IO扩展芯片
-    if (!lcd_pca9557_init()) {
-        ESP_LOGE("main", "PCA9557 initialization failed");
+    // 初始化摄像头组件（摄像头会使用已初始化的I2C总线）
+    if (!camera_init()) {
+        ESP_LOGE("main", "Camera initialization failed");
         return;
     }
     

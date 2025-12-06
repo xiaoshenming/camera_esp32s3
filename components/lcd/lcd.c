@@ -132,6 +132,10 @@ bool lcd_pca9557_init(void)
     }
     
     ESP_LOGI(TAG, "PCA9557 initialized successfully");
+    
+    // 等待PCA9557稳定
+    vTaskDelay(pdMS_TO_TICKS(50));
+    
     return true;
 }
 
@@ -283,6 +287,12 @@ static bool lcd_display_new(void)
 bool lcd_init(void)
 {
     ESP_LOGI(TAG, "Initializing LCD...");
+    
+    // 首先初始化背光PWM
+    if (!lcd_backlight_init()) {
+        ESP_LOGE(TAG, "LCD backlight initialization failed");
+        return false;
+    }
     
     if (!lcd_display_new()) {
         ESP_LOGE(TAG, "LCD display new failed");
