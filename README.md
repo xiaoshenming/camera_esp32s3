@@ -65,3 +65,4 @@ idf.py build
 
 # 烧录到设备
 idf.py flash monitor
+idf.py build &&  idf.py flash monitor
