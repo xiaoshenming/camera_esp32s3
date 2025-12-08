@@ -654,24 +654,32 @@ class ESP32CameraStreamer:
                 logger.debug(f"RGB565数据长度不匹配: 期望{expected_length}, 实际{len(rgb565_data)}")
                 return
             
-            # 转换为numpy数组 (小端序)
-            rgb565_array = np.frombuffer(rgb565_data, dtype=np.uint16)
-            
-            # 重塑为640x480
-            rgb565_image = rgb565_array.reshape((480, 640))
-            
-            # 提取RGB分量 (RGB565格式: RRRRRGGGGGGBBBBB)
-            r5 = (rgb565_image >> 11) & 0x1F  # 5位红色
-            g6 = (rgb565_image >> 5) & 0x3F   # 6位绿色
-            b5 = rgb565_image & 0x1F         # 5位蓝色
-            
-            # 扩展到8位
-            r8 = (r5 << 3) | (r5 >> 2)  # 5位扩展到8位
-            g8 = (g6 << 2) | (g6 >> 4)  # 6位扩展到8位
-            b8 = (b5 << 3) | (b5 >> 2)  # 5位扩展到8位
-            
-            # 创建BGR图像 (OpenCV使用BGR顺序)
-            bgr_image = np.stack([b8, g8, r8], axis=2).astype(np.uint8)
+            # 直接逐字节解析RGB565数据 (大端序)
+            height, width = 480, 640
+            bgr_image = np.zeros((height, width, 3), dtype=np.uint8)
+
+            for i in range(height):
+                for j in range(width):
+                    # 每个像素2字节
+                    idx = (i * width + j) * 2
+                    if idx + 1 < len(rgb565_data):
+                        # 大端序: 高字节在前，低字节在后
+                        high_byte = rgb565_data[idx]
+                        low_byte = rgb565_data[idx + 1]
+                        rgb565 = (high_byte << 8) | low_byte
+
+                        # 提取RGB分量
+                        r5 = (rgb565 >> 11) & 0x1F  # 5位红色
+                        g6 = (rgb565 >> 5) & 0x3F   # 6位绿色
+                        b5 = rgb565 & 0x1F         # 5位蓝色
+
+                        # 扩展到8位
+                        r8 = (r5 * 255) // 31
+                        g8 = (g6 * 255) // 63
+                        b8 = (b5 * 255) // 31
+
+                        # 设置BGR像素值
+                        bgr_image[i, j] = [b8, g8, r8]
             
             # 检查图像是否有效
             if np.any(bgr_image > 0):
