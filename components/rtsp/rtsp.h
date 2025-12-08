@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include "esp_err.h"
+#include "esp_camera.h"
 #include "camera.h"
 
 // RTSP服务器配置

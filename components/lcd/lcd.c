@@ -370,5 +370,48 @@ void lcd_draw_camera_frame(int x_start, int y_start, int width, int height, cons
         return;
     }
     
-    esp_lcd_panel_draw_bitmap(panel_handle, x_start, y_start, width, height, (uint16_t *)frame_buf);
+    // 如果输入是640x480，需要缩放到320x240
+    if (width == 640 && height == 480) {
+        // 分配缩放后的缓冲区 (320x240)
+        size_t scaled_size = 320 * 240 * sizeof(uint16_t);
+        uint16_t *scaled_buffer = (uint16_t *)heap_caps_malloc(scaled_size, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
+        
+        if (!scaled_buffer) {
+            ESP_LOGE(TAG, "Failed to allocate memory for scaled frame");
+            return;
+        }
+        
+        // 简单的2x2像素平均缩放
+        const uint16_t *src = (const uint16_t *)frame_buf;
+        uint16_t *dst = scaled_buffer;
+        
+        for (int y = 0; y < 240; y++) {
+            for (int x = 0; x < 320; x++) {
+                // 取2x2像素块的平均值
+                int src_x = x * 2;
+                int src_y = y * 2;
+                
+                uint32_t sum = 0;
+                int count = 0;
+                
+                // 读取2x2像素块
+                for (int dy = 0; dy < 2 && (src_y + dy) < 480; dy++) {
+                    for (int dx = 0; dx < 2 && (src_x + dx) < 640; dx++) {
+                        sum += src[(src_y + dy) * 640 + (src_x + dx)];
+                        count++;
+                    }
+                }
+                
+                // 计算平均值
+                dst[y * 320 + x] = (uint16_t)(sum / count);
+            }
+        }
+        
+        // 显示缩放后的图像
+        esp_lcd_panel_draw_bitmap(panel_handle, 0, 0, 320, 240, scaled_buffer);
+        heap_caps_free(scaled_buffer);
+    } else {
+        // 直接显示原始尺寸
+        esp_lcd_panel_draw_bitmap(panel_handle, x_start, y_start, width, height, (uint16_t *)frame_buf);
+    }
 }

@@ -42,6 +42,18 @@ bool camera_start_lcd_display(void);
  */
 bool camera_stop_lcd_display(void);
 
+/**
+ * @brief 启动摄像头RTSP推流
+ * @return true 成功，false 失败
+ */
+bool camera_start_rtsp_stream(void);
+
+/**
+ * @brief 停止摄像头RTSP推流
+ * @return true 成功，false 失败
+ */
+bool camera_stop_rtsp_stream(void);
+
 #ifdef __cplusplus
 }
 #endif

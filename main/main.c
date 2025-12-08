@@ -85,9 +85,9 @@ void app_main(void)
     char* stream_url = rtsp_get_stream_url();
     ESP_LOGI("main", "RTSP Stream URL: %s", stream_url ? stream_url : "Unknown");
     
-    // 启动摄像头到LCD的实时显示
-    if (!camera_start_lcd_display()) {
-        ESP_LOGE("main", "Failed to start camera LCD display");
+    // 启动摄像头RTSP推流
+    if (!camera_start_rtsp_stream()) {
+        ESP_LOGE("main", "Failed to start camera RTSP stream");
         return;
     }
     

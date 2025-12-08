@@ -16,6 +16,8 @@ import logging
 from datetime import datetime
 import os
 import sys
+import socket
+import struct
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -157,33 +159,22 @@ class ESP32CameraStreamer:
             
             logger.info(f"正在连接到RTSP流: {rtsp_url}")
             
-            # 创建VideoCapture对象
-            self.cap = cv2.VideoCapture(rtsp_url)
-            
-            # 设置缓冲区大小以减少延迟
-            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            
-            # 设置超时
-            self.cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000)
-            self.cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000)
-            
-            # 检查连接是否成功
-            if not self.cap.isOpened():
-                logger.error("无法打开RTSP流")
+            # 解析RTSP URL
+            parsed_url = self.parse_rtsp_url(rtsp_url)
+            if not parsed_url:
+                logger.error("无法解析RTSP URL")
                 return False
             
-            # 读取第一帧测试
-            ret, frame = self.cap.read()
-            if not ret:
-                logger.error("无法从RTSP流读取帧")
-                self.cap.release()
+            # 创建RTSP连接
+            if not self.setup_rtsp_connection(parsed_url):
+                logger.error("无法建立RTSP连接")
                 return False
             
             self.rtsp_url = rtsp_url
             self.is_streaming = True
             
             # 启动流处理线程
-            self.stream_thread = threading.Thread(target=self.stream_worker, daemon=True)
+            self.stream_thread = threading.Thread(target=self.rgb565_stream_worker, daemon=True)
             self.stream_thread.start()
             
             logger.info("RTSP流连接成功")
@@ -202,6 +193,27 @@ class ESP32CameraStreamer:
     def disconnect_rtsp(self):
         """断开RTSP连接"""
         self.is_streaming = False
+        
+        # 关闭RTSP socket
+        if hasattr(self, 'rtsp_socket'):
+            try:
+                # 发送TEARDOWN请求
+                if hasattr(self, 'cseq') and hasattr(self, 'rtsp_url') and self.rtsp_url:
+                    parsed_url = self.parse_rtsp_url(self.rtsp_url)
+                    if parsed_url:
+                        self.cseq += 1
+                        teardown_request = f"TEARDOWN {parsed_url['path']} RTSP/1.0\r\n"
+                        teardown_request += f"CSeq: {self.cseq}\r\n"
+                        teardown_request += "User-Agent: ESP32-Camera-Client\r\n\r\n"
+                        
+                        try:
+                            self.rtsp_socket.send(teardown_request.encode())
+                        except:
+                            pass  # 忽略发送错误
+                
+                self.rtsp_socket.close()
+            except:
+                pass  # 忽略关闭错误
         
         if self.cap:
             self.cap.release()
@@ -335,6 +347,196 @@ class ESP32CameraStreamer:
         except Exception as e:
             logger.error(f"停止录制时出错: {e}")
             return jsonify({'success': False, 'message': f'停止录制失败: {e}'})
+    
+    def parse_rtsp_url(self, rtsp_url):
+        """解析RTSP URL"""
+        try:
+            # 解析 rtsp://ip:port/path
+            if rtsp_url.startswith('rtsp://'):
+                url = rtsp_url[7:]  # 移除 'rtsp://'
+                parts = url.split('/')
+                if len(parts) >= 1:
+                    host_port = parts[0]
+                    if ':' in host_port:
+                        host, port = host_port.split(':')
+                        port = int(port)
+                    else:
+                        host = host_port
+                        port = 554  # 默认RTSP端口
+                    
+                    path = '/' + '/'.join(parts[1:]) if len(parts) > 1 else '/'
+                    
+                    return {
+                        'host': host,
+                        'port': port,
+                        'path': path
+                    }
+        except Exception as e:
+            logger.error(f"解析RTSP URL失败: {e}")
+        return None
+    
+    def setup_rtsp_connection(self, parsed_url):
+        """设置RTSP连接"""
+        try:
+            # 创建TCP连接
+            self.rtsp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.rtsp_socket.settimeout(10)
+            self.rtsp_socket.connect((parsed_url['host'], parsed_url['port']))
+            
+            # 发送OPTIONS请求
+            self.cseq = 1
+            options_request = f"OPTIONS {parsed_url['path']} RTSP/1.0\r\n"
+            options_request += f"CSeq: {self.cseq}\r\n"
+            options_request += "User-Agent: ESP32-Camera-Client\r\n\r\n"
+            
+            self.rtsp_socket.send(options_request.encode())
+            response = self.rtsp_socket.recv(1024).decode()
+            
+            if "200 OK" not in response:
+                logger.error("OPTIONS请求失败")
+                return False
+            
+            # 发送DESCRIBE请求
+            self.cseq += 1
+            describe_request = f"DESCRIBE {parsed_url['path']} RTSP/1.0\r\n"
+            describe_request += f"CSeq: {self.cseq}\r\n"
+            describe_request += "Accept: application/sdp\r\n"
+            describe_request += "User-Agent: ESP32-Camera-Client\r\n\r\n"
+            
+            self.rtsp_socket.send(describe_request.encode())
+            response = self.rtsp_socket.recv(4096).decode()
+            
+            if "200 OK" not in response:
+                logger.error("DESCRIBE请求失败")
+                return False
+            
+            # 发送SETUP请求
+            self.cseq += 1
+            setup_request = f"SETUP {parsed_url['path']}/streamid=0 RTSP/1.0\r\n"
+            setup_request += f"CSeq: {self.cseq}\r\n"
+            setup_request += "Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n"
+            setup_request += "User-Agent: ESP32-Camera-Client\r\n\r\n"
+            
+            self.rtsp_socket.send(setup_request.encode())
+            response = self.rtsp_socket.recv(1024).decode()
+            
+            if "200 OK" not in response:
+                logger.error("SETUP请求失败")
+                return False
+            
+            # 发送PLAY请求
+            self.cseq += 1
+            play_request = f"PLAY {parsed_url['path']} RTSP/1.0\r\n"
+            play_request += f"CSeq: {self.cseq}\r\n"
+            play_request += "User-Agent: ESP32-Camera-Client\r\n\r\n"
+            
+            self.rtsp_socket.send(play_request.encode())
+            response = self.rtsp_socket.recv(1024).decode()
+            
+            if "200 OK" not in response:
+                logger.error("PLAY请求失败")
+                return False
+            
+            logger.info("RTSP连接建立成功")
+            return True
+            
+        except Exception as e:
+            logger.error(f"设置RTSP连接失败: {e}")
+            return False
+    
+    def rgb565_stream_worker(self):
+        """RGB565流处理工作线程"""
+        logger.info("RGB565流处理线程已启动")
+        
+        try:
+            while self.is_streaming:
+                # 接收数据
+                data = self.rtsp_socket.recv(65536)
+                if not data:
+                    break
+                
+                # 解析TCP interleaved数据
+                self.process_interleaved_data(data)
+                
+        except Exception as e:
+            logger.error(f"RGB565流处理错误: {e}")
+        finally:
+            if hasattr(self, 'rtsp_socket'):
+                self.rtsp_socket.close()
+        
+        logger.info("RGB565流处理线程已结束")
+    
+    def process_interleaved_data(self, data):
+        """处理TCP interleaved数据"""
+        try:
+            offset = 0
+            while offset < len(data):
+                if offset + 4 > len(data):
+                    break
+                
+                # 检查interleaved frame header: '$' + channel + length
+                if data[offset] == 0x24:  # '$'
+                    channel = data[offset + 1]
+                    length = (data[offset + 2] << 8) | data[offset + 3]
+                    
+                    if offset + 4 + length > len(data):
+                        break
+                    
+                    # 跳过RTP头部(12字节)，获取RGB565数据
+                    if length > 12:
+                        rgb565_data = data[offset + 4 + 12:offset + 4 + length]
+                        self.convert_rgb565_to_bgr(rgb565_data)
+                    
+                    offset += 4 + length
+                else:
+                    offset += 1
+                    
+        except Exception as e:
+            logger.error(f"处理interleaved数据错误: {e}")
+    
+    def convert_rgb565_to_bgr(self, rgb565_data):
+        """将RGB565数据转换为BGR格式"""
+        try:
+            # RGB565数据长度应该是640*480*2 = 614400字节
+            if len(rgb565_data) != 614400:
+                return
+            
+            # 转换为numpy数组
+            rgb565_array = np.frombuffer(rgb565_data, dtype=np.uint16)
+            
+            # 重塑为640x480
+            rgb565_image = rgb565_array.reshape((480, 640))
+            
+            # 提取RGB分量
+            r5 = (rgb565_image >> 11) & 0x1F
+            g6 = (rgb565_image >> 5) & 0x3F
+            b5 = rgb565_image & 0x1F
+            
+            # 扩展到8位
+            r8 = (r5 << 3) | (r5 >> 2)
+            g8 = (g6 << 2) | (g6 >> 4)
+            b8 = (b5 << 3) | (b5 >> 2)
+            
+            # 创建BGR图像
+            bgr_image = np.stack([b8, g8, r8], axis=2).astype(np.uint8)
+            
+            with self.frame_lock:
+                self.current_frame = bgr_image.copy()
+            
+            # 更新FPS
+            self.frame_count += 1
+            current_time = time.time()
+            if current_time - self.last_fps_update >= 1.0:
+                self.fps = self.frame_count / (current_time - self.last_fps_update)
+                self.frame_count = 0
+                self.last_fps_update = current_time
+                
+                # 录制帧
+                if self.is_recording and self.video_writer:
+                    self.video_writer.write(bgr_image)
+                    
+        except Exception as e:
+            logger.error(f"RGB565转换错误: {e}")
     
     def run(self, host='0.0.0.0', port=5000, debug=False):
         """运行Flask应用"""

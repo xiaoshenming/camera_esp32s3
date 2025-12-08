@@ -1,3 +1,3 @@
 idf_component_register(SRCS "camera.c"
                     INCLUDE_DIRS "."
-                    REQUIRES log lcd espressif__esp32-camera)
+                    REQUIRES log lcd espressif__esp32-camera rtsp)
