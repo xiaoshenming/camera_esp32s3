@@ -39,12 +39,18 @@ void app_main(void)
     
     // 等待WiFi连接
     if (!wifi_wait_connection(20000)) {
-        ESP_LOGE("main", "WiFi connection timeout");
-        return;
+        ESP_LOGE("main", "WiFi connection timeout, but continuing with RTSP server...");
+        // 继续执行，不返回
     }
     
     char* ip_address = wifi_get_ip_address();
-    ESP_LOGI("main", "WiFi connected! IP Address: %s", ip_address ? ip_address : "Unknown");
+    if (ip_address) {
+        ESP_LOGI("main", "WiFi connected! IP Address: %s", ip_address);
+    } else {
+        ESP_LOGW("main", "WiFi not connected, using default IP 192.168.1.111");
+        // 设置默认IP用于测试
+        ip_address = "192.168.1.111";
+    }
     
     // 初始化RTSP服务器
     if (!rtsp_init()) {

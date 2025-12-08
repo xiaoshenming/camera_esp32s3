@@ -68,12 +68,12 @@ bool camera_init(void)
     config.sccb_i2c_port = 0;                // 使用I2C端口0
     config.pin_pwdn = CAMERA_PIN_PWDN;
     config.pin_reset = CAMERA_PIN_RESET;
-    config.xclk_freq_hz = XCLK_FREQ_HZ;
+    config.xclk_freq_hz = 12000000; // 进一步降低时钟频率到12MHz
     config.pixel_format = PIXFORMAT_RGB565;
-    config.frame_size = FRAMESIZE_QVGA;  // 修改为320x240以匹配LCD分辨率
-    config.fb_count = 2;  // 增加帧缓冲区数量以支持RTSP
+    config.frame_size = FRAMESIZE_VGA;  // 640x480以匹配RTSP期望
+    config.fb_count = 4;  // 增加更多帧缓冲区数量
     config.fb_location = CAMERA_FB_IN_PSRAM;
-    config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+    config.grab_mode = CAMERA_GRAB_LATEST;  // 使用最新帧模式，避免堆积
 
     // 摄像头初始化
     esp_err_t err = esp_camera_init(&config);
@@ -109,40 +109,62 @@ uint8_t* camera_get_image_data(void)
 static void camera_unified_task(void *arg)
 {
     ESP_LOGI(TAG, "Camera unified task started");
-    
+
+    // 帧获取统计
+    uint32_t frame_count = 0;
+    uint32_t error_count = 0;
+    TickType_t last_frame_time = xTaskGetTickCount();
+    const TickType_t frame_interval = pdMS_TO_TICKS(200); // 5fps = 200ms间隔
+
     while (display_running || rtsp_running) {
-        camera_fb_t *frame = esp_camera_fb_get();
-        if (frame) {
-            // 如果LCD显示运行，发送到LCD
-            if (display_running) {
-                // 创建帧的副本用于LCD显示
-                camera_fb_t *lcd_frame = (camera_fb_t *)malloc(sizeof(camera_fb_t));
-                if (lcd_frame) {
-                    memcpy(lcd_frame, frame, sizeof(camera_fb_t));
-                    // 不复制数据，直接使用原始数据（LCD函数会处理缩放）
+        // 使用更精确的帧率控制
+        TickType_t current_time = xTaskGetTickCount();
+        if ((current_time - last_frame_time) >= frame_interval) {
+            camera_fb_t *frame = esp_camera_fb_get();
+            if (frame) {
+                frame_count++;
+                error_count = 0; // 重置错误计数
+
+                // 如果LCD显示运行，发送到LCD
+                if (display_running) {
                     lcd_draw_camera_frame(0, 0, frame->width, frame->height, frame->buf);
-                    free(lcd_frame);
+                }
+
+                // 如果RTSP推流运行，发送到RTSP
+                if (rtsp_running) {
+                    // 发送帧到RTSP服务器（注意：rtsp_send_frame会负责释放帧）
+                    rtsp_send_frame(frame);
+                } else {
+                    // 如果RTSP没有运行，立即释放帧
+                    esp_camera_fb_return(frame);
+                }
+
+                last_frame_time = current_time;
+
+                // 每100帧记录一次统计信息
+                if (frame_count % 100 == 0) {
+                    ESP_LOGI(TAG, "Camera task: processed %u frames, current FPS: %.1f",
+                             frame_count, 1000.0 / (frame_interval * portTICK_PERIOD_MS));
+                }
+            } else {
+                error_count++;
+                ESP_LOGW(TAG, "Failed to get camera frame (error #%u)", error_count);
+
+                // 连续错误过多时进行更长的延迟
+                if (error_count > 10) {
+                    ESP_LOGE(TAG, "Too many consecutive errors, increasing delay");
+                    vTaskDelay(pdMS_TO_TICKS(100));
+                } else {
+                    vTaskDelay(pdMS_TO_TICKS(10));
                 }
             }
-            
-            // 如果RTSP推流运行，发送到RTSP
-            if (rtsp_running) {
-                // 发送原始帧到RTSP服务器
-                rtsp_send_frame(frame);
-            } else {
-                // 如果RTSP没有运行，释放帧
-                esp_camera_fb_return(frame);
-            }
         } else {
-            ESP_LOGW(TAG, "Failed to get camera frame");
-            vTaskDelay(pdMS_TO_TICKS(10));
+            // 等待到下一帧时间
+            vTaskDelay(1);
         }
-        
-        // 控制帧率到10fps
-        vTaskDelay(pdMS_TO_TICKS(100));
     }
-    
-    ESP_LOGI(TAG, "Camera unified task stopped");
+
+    ESP_LOGI(TAG, "Camera unified task stopped. Total frames: %u", frame_count);
     vTaskDelete(NULL);
 }
 
@@ -212,28 +234,8 @@ bool camera_stop_lcd_display(void)
     return true;
 }
 
-// RTSP推流任务
-static void camera_rtsp_task(void *arg)
-{
-    ESP_LOGI(TAG, "Camera RTSP task started");
-    
-    while (rtsp_running) {
-        camera_fb_t *frame = esp_camera_fb_get();
-        if (frame) {
-            // 发送帧到RTSP服务器
-            rtsp_send_frame(frame);
-        } else {
-            ESP_LOGW(TAG, "Failed to get camera frame for RTSP");
-            vTaskDelay(pdMS_TO_TICKS(10));
-        }
-        
-        // 控制帧率到10fps
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
-    
-    ESP_LOGI(TAG, "Camera RTSP task stopped");
-    vTaskDelete(NULL);
-}
+// RTSP推流任务 (已弃用，统一到camera_unified_task)
+// static void camera_rtsp_task(void *arg)  // 保留注释以说明统一任务的实现
 
 // 启动摄像头RTSP推流
 bool camera_start_rtsp_stream(void)

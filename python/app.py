@@ -18,9 +18,10 @@ import os
 import sys
 import socket
 import struct
+from socket import SO_KEEPALIVE, TCP_NODELAY, SO_RCVBUF, SO_SNDBUF
 
 # 配置日志
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class ESP32CameraStreamer:
@@ -222,6 +223,10 @@ class ESP32CameraStreamer:
         if self.stream_thread and self.stream_thread.is_alive():
             self.stream_thread.join(timeout=2)
         
+        # 清理缓冲区
+        if hasattr(self, 'data_buffer'):
+            self.data_buffer = b''
+        
         self.rtsp_url = ""
         self.current_frame = None
         
@@ -380,8 +385,17 @@ class ESP32CameraStreamer:
         try:
             # 创建TCP连接
             self.rtsp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.rtsp_socket.settimeout(10)
+
+            # 优化socket设置
+            self.rtsp_socket.setsockopt(socket.SOL_SOCKET, SO_KEEPALIVE, 1)
+            self.rtsp_socket.setsockopt(socket.IPPROTO_TCP, TCP_NODELAY, 1)
+            self.rtsp_socket.setsockopt(socket.SOL_SOCKET, SO_RCVBUF, 65536)  # 64KB接收缓冲区
+            self.rtsp_socket.setsockopt(socket.SOL_SOCKET, SO_SNDBUF, 65536)  # 64KB发送缓冲区
+
+            self.rtsp_socket.settimeout(5)  # 减少超时时间
+            logger.info(f"正在连接到 {parsed_url['host']}:{parsed_url['port']}")
             self.rtsp_socket.connect((parsed_url['host'], parsed_url['port']))
+            logger.info("TCP连接建立成功")
             
             # 发送OPTIONS请求
             self.cseq = 1
@@ -447,127 +461,291 @@ class ESP32CameraStreamer:
     def rgb565_stream_worker(self):
         """RGB565流处理工作线程"""
         logger.info("RGB565流处理线程已启动")
-        
-        try:
-            while self.is_streaming:
-                # 接收数据
-                data = self.rtsp_socket.recv(65536)
-                if not data:
+
+        retry_count = 0
+        max_retries = 3
+        retry_delay = 2  # 秒
+
+        while self.is_streaming and retry_count < max_retries:
+            try:
+                # 设置socket超时
+                self.rtsp_socket.settimeout(5.0)
+
+                consecutive_errors = 0
+                max_consecutive_errors = 10
+
+                while self.is_streaming:
+                    try:
+                        # 使用较小的接收缓冲区，匹配ESP32的512字节块大小
+                        data = self.rtsp_socket.recv(1024)  # 1KB缓冲区
+                        if not data:
+                            logger.info("连接已关闭")
+                            break
+
+                        # 检查是否是RTSP响应（以RTSP/开头）
+                        if data.startswith(b'RTSP/'):
+                            logger.debug(f"收到RTSP响应: {data[:100]}")
+                            continue
+
+                        # 解析TCP interleaved数据
+                        self.process_interleaved_data(data)
+
+                        # 重置错误计数器
+                        consecutive_errors = 0
+                        retry_count = 0  # 成功接收数据，重置重试计数
+
+                    except socket.timeout:
+                        # 超时是正常的，继续循环
+                        consecutive_errors = 0
+                        continue
+                    except ConnectionResetError as e:
+                        logger.error(f"连接被重置: {e}")
+                        consecutive_errors += 1
+                        break
+                    except ConnectionAbortedError as e:
+                        logger.error(f"连接被中止: {e}")
+                        consecutive_errors += 1
+                        break
+                    except Exception as e:
+                        logger.error(f"接收数据时出错: {e}")
+                        consecutive_errors += 1
+                        if consecutive_errors >= max_consecutive_errors:
+                            logger.error(f"连续错误{consecutive_errors}次，尝试重新连接")
+                            break
+                        time.sleep(0.1)  # 短暂延迟后重试
+                        continue
+
+                # 如果退出内循环但仍然需要流，则尝试重新连接
+                if self.is_streaming:
+                    logger.info(f"尝试重新连接 ({retry_count + 1}/{max_retries})")
+                    self.rtsp_socket.close()
+
+                    # 等待一段时间后重新连接
+                    time.sleep(retry_delay)
+
+                    # 解析URL并重新建立连接
+                    parsed_url = self.parse_rtsp_url(self.rtsp_url)
+                    if parsed_url and self.setup_rtsp_connection(parsed_url):
+                        logger.info("重新连接成功")
+                        continue
+                    else:
+                        logger.error("重新连接失败")
+                        retry_count += 1
+                else:
                     break
-                
-                # 解析TCP interleaved数据
-                self.process_interleaved_data(data)
-                
-        except Exception as e:
-            logger.error(f"RGB565流处理错误: {e}")
-        finally:
+
+            except Exception as e:
+                logger.error(f"流处理错误: {e}")
+                retry_count += 1
+                time.sleep(retry_delay)
+
+        # 最终清理
+        try:
             if hasattr(self, 'rtsp_socket'):
                 self.rtsp_socket.close()
-        
+        except:
+            pass
+
+        if retry_count >= max_retries:
+            logger.error(f"重连{max_retries}次失败，停止流处理")
+            self.is_streaming = False
+
         logger.info("RGB565流处理线程已结束")
     
     def process_interleaved_data(self, data):
-        """处理TCP interleaved数据"""
+        """处理简化的RGB565帧数据"""
         try:
-            offset = 0
-            while offset < len(data):
-                if offset + 4 > len(data):
+            # 缓冲区用于处理跨包的数据
+            if not hasattr(self, 'data_buffer'):
+                self.data_buffer = b''
+                self.debug_last_log = 0
+                self.total_frames_received = 0
+
+            # 将新数据添加到缓冲区
+            self.data_buffer += data
+
+            # 限制缓冲区大小，防止内存泄漏
+            max_buffer_size = 2 * 1024 * 1024  # 2MB缓冲区限制
+            if len(self.data_buffer) > max_buffer_size:
+                logger.warning(f"缓冲区过大，重置缓冲区: {len(self.data_buffer)} bytes")
+                self.data_buffer = b''
+                return
+
+            # 减少日志输出频率
+            current_time = time.time()
+            should_log = current_time - self.debug_last_log > 5  # 每5秒记录一次
+            if should_log:
+                logger.info(f"缓冲区大小: {len(self.data_buffer)} 字节")
+                if len(self.data_buffer) > 0:
+                    logger.info(f"数据前8字节: {self.data_buffer[:8].hex()}")
+                self.debug_last_log = current_time
+
+            frame_count = 0
+            max_frames_per_process = 5  # 每次最多处理5帧
+
+            # 寻找帧同步头: AA55FFFE
+            while len(self.data_buffer) >= 614408 and frame_count < max_frames_per_process:  # 8字节头 + 614400字节数据
+                # 寻找帧同步头
+                sync_pos = self.data_buffer.find(b'\xAA\x55\xFF\xFE')
+                if sync_pos == -1:
+                    # 没有找到同步头，清空大部分缓冲区
+                    self.data_buffer = self.data_buffer[-100:] if len(self.data_buffer) > 100 else b''
                     break
-                
-                # 检查interleaved frame header: '$' + channel + length
-                if data[offset] == 0x24:  # '$'
-                    channel = data[offset + 1]
-                    length = (data[offset + 2] << 8) | data[offset + 3]
-                    
-                    if offset + 4 + length > len(data):
-                        break
-                    
-                    # 跳过RTP头部(12字节)，获取RGB565数据
-                    if length > 12:
-                        rgb565_data = data[offset + 4 + 12:offset + 4 + length]
-                        self.convert_rgb565_to_bgr(rgb565_data)
-                    
-                    offset += 4 + length
-                else:
-                    offset += 1
-                    
+
+                # 移除同步头之前的数据
+                if sync_pos > 0:
+                    self.data_buffer = self.data_buffer[sync_pos:]
+
+                # 检查是否有完整的帧
+                if len(self.data_buffer) < 614408:  # 8字节头 + 614400字节数据
+                    break
+
+                # 解析帧头
+                if len(self.data_buffer) >= 8:
+                    # 验证同步头
+                    if (self.data_buffer[0] == 0xAA and self.data_buffer[1] == 0x55 and
+                        self.data_buffer[2] == 0xFF and self.data_buffer[3] == 0xFE):
+
+                        # 解析数据长度
+                        data_len = (self.data_buffer[4] << 24) | (self.data_buffer[5] << 16) | (self.data_buffer[6] << 8) | self.data_buffer[7]
+
+                        # 验证数据长度
+                        if data_len == 614400:  # RGB565数据长度
+                            # 提取RGB565数据
+                            rgb565_data = self.data_buffer[8:8+data_len]
+
+                            # 转换并显示图像
+                            self.convert_rgb565_to_bgr(rgb565_data)
+                            frame_count += 1
+                            self.total_frames_received += 1
+
+                            # 每20帧记录一次
+                            if self.total_frames_received % 20 == 0:
+                                logger.info(f"成功处理了 {self.total_frames_received} 帧")
+
+                            # 移除已处理的帧
+                            self.data_buffer = self.data_buffer[8+data_len:]
+                            continue
+                        else:
+                            logger.warning(f"数据长度不匹配: 期望614400, 实际{data_len}")
+                            # 跳过这个同步头
+                            self.data_buffer = self.data_buffer[1:]
+                            continue
+                    else:
+                        # 同步头不匹配，跳过第一个字节
+                        self.data_buffer = self.data_buffer[1:]
+
+            if frame_count > 0 and should_log:
+                logger.info(f"本次处理了 {frame_count} 帧")
+
         except Exception as e:
-            logger.error(f"处理interleaved数据错误: {e}")
+            logger.error(f"处理RGB565数据错误: {e}")
+            import traceback
+            logger.error(f"详细错误信息: {traceback.format_exc()}")
+            # 出错时重置缓冲区
+            self.data_buffer = b''
     
     def convert_rgb565_to_bgr(self, rgb565_data):
         """将RGB565数据转换为BGR格式"""
         try:
             # RGB565数据长度应该是640*480*2 = 614400字节
-            if len(rgb565_data) != 614400:
+            expected_length = 640 * 480 * 2
+            if len(rgb565_data) != expected_length:
+                logger.debug(f"RGB565数据长度不匹配: 期望{expected_length}, 实际{len(rgb565_data)}")
                 return
             
-            # 转换为numpy数组
+            # 转换为numpy数组 (小端序)
             rgb565_array = np.frombuffer(rgb565_data, dtype=np.uint16)
             
             # 重塑为640x480
             rgb565_image = rgb565_array.reshape((480, 640))
             
-            # 提取RGB分量
-            r5 = (rgb565_image >> 11) & 0x1F
-            g6 = (rgb565_image >> 5) & 0x3F
-            b5 = rgb565_image & 0x1F
+            # 提取RGB分量 (RGB565格式: RRRRRGGGGGGBBBBB)
+            r5 = (rgb565_image >> 11) & 0x1F  # 5位红色
+            g6 = (rgb565_image >> 5) & 0x3F   # 6位绿色
+            b5 = rgb565_image & 0x1F         # 5位蓝色
             
             # 扩展到8位
-            r8 = (r5 << 3) | (r5 >> 2)
-            g8 = (g6 << 2) | (g6 >> 4)
-            b8 = (b5 << 3) | (b5 >> 2)
+            r8 = (r5 << 3) | (r5 >> 2)  # 5位扩展到8位
+            g8 = (g6 << 2) | (g6 >> 4)  # 6位扩展到8位
+            b8 = (b5 << 3) | (b5 >> 2)  # 5位扩展到8位
             
-            # 创建BGR图像
+            # 创建BGR图像 (OpenCV使用BGR顺序)
             bgr_image = np.stack([b8, g8, r8], axis=2).astype(np.uint8)
             
-            with self.frame_lock:
-                self.current_frame = bgr_image.copy()
-            
-            # 更新FPS
-            self.frame_count += 1
-            current_time = time.time()
-            if current_time - self.last_fps_update >= 1.0:
-                self.fps = self.frame_count / (current_time - self.last_fps_update)
-                self.frame_count = 0
-                self.last_fps_update = current_time
+            # 检查图像是否有效
+            if np.any(bgr_image > 0):
+                with self.frame_lock:
+                    self.current_frame = bgr_image.copy()
                 
-                # 录制帧
-                if self.is_recording and self.video_writer:
-                    self.video_writer.write(bgr_image)
+                # 更新FPS
+                self.frame_count += 1
+                current_time = time.time()
+                if current_time - self.last_fps_update >= 1.0:
+                    self.fps = self.frame_count / (current_time - self.last_fps_update)
+                    self.frame_count = 0
+                    self.last_fps_update = current_time
+                    
+                    # 录制帧
+                    if self.is_recording and self.video_writer:
+                        self.video_writer.write(bgr_image)
+            else:
+                logger.debug("接收到全黑图像")
                     
         except Exception as e:
             logger.error(f"RGB565转换错误: {e}")
+            import traceback
+            logger.error(f"详细错误信息: {traceback.format_exc()}")
     
     def run(self, host='0.0.0.0', port=5000, debug=False):
         """运行Flask应用"""
         logger.info(f"启动Web服务器: http://{host}:{port}")
-        self.socketio.run(self.app, host=host, port=port, debug=debug)
+        try:
+            self.socketio.run(self.app, host=host, port=port, debug=debug)
+        except KeyboardInterrupt:
+            logger.info("收到中断信号，正在关闭...")
+        except Exception as e:
+            logger.error(f"服务器运行错误: {e}")
+        finally:
+            # 确保清理资源
+            self.disconnect_rtsp()
 
 def main():
     """主函数"""
     import argparse
-    
+    import signal
+    import sys
+
     parser = argparse.ArgumentParser(description='ESP32-S3 Camera RTSP Stream Viewer')
     parser.add_argument('--host', default='0.0.0.0', help='服务器主机地址')
     parser.add_argument('--port', type=int, default=5000, help='服务器端口')
     parser.add_argument('--debug', action='store_true', help='启用调试模式')
     parser.add_argument('--rtsp', help='自动连接的RTSP URL')
-    
+
     args = parser.parse_args()
-    
+
     # 创建流媒体服务器
     streamer = ESP32CameraStreamer()
-    
+
+    def signal_handler(sig, frame):
+        logger.info("收到信号，正在关闭...")
+        streamer.disconnect_rtsp()
+        sys.exit(0)
+
+    # 注册信号处理器
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
     # 如果提供了RTSP URL，自动连接
     if args.rtsp:
         logger.info(f"自动连接到RTSP流: {args.rtsp}")
         streamer.connect_rtsp(args.rtsp)
-    
+
     # 启动服务器
     try:
         streamer.run(host=args.host, port=args.port, debug=args.debug)
-    except KeyboardInterrupt:
-        logger.info("服务器已停止")
+    except Exception as e:
+        logger.error(f"服务器错误: {e}")
     finally:
         streamer.disconnect_rtsp()
 

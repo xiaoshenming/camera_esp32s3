@@ -141,17 +141,30 @@ bool wifi_wait_connection(int timeout_ms)
 {
     ESP_LOGI(TAG, "Waiting for WiFi connection...");
     
-    EventBits_t bits = xEventGroupWaitBits(wifi_event_group,
-                                           WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
-                                           pdFALSE,
-                                           pdFALSE,
-                                           pdMS_TO_TICKS(timeout_ms));
-    
-    if (bits & WIFI_CONNECTED_BIT) {
-        ESP_LOGI(TAG, "Connected to WiFi successfully");
-        return true;
-    } else {
-        ESP_LOGE(TAG, "Failed to connect to WiFi within timeout");
-        return false;
+    // 分段等待，每2秒输出一次状态
+    int remaining_time = timeout_ms;
+    while (remaining_time > 0) {
+        EventBits_t bits = xEventGroupWaitBits(wifi_event_group,
+                                               WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
+                                               pdFALSE,
+                                               pdFALSE,
+                                               pdMS_TO_TICKS(2000));
+        
+        if (bits & WIFI_CONNECTED_BIT) {
+            ESP_LOGI(TAG, "Connected to WiFi successfully");
+            return true;
+        }
+        
+        remaining_time -= 2000;
+        if (remaining_time > 0) {
+            ESP_LOGI(TAG, "Still waiting for WiFi connection... %d ms remaining", remaining_time);
+        }
     }
+    
+    ESP_LOGE(TAG, "Failed to connect to WiFi within %d ms timeout", timeout_ms);
+    ESP_LOGE(TAG, "Please check:");
+    ESP_LOGE(TAG, "  1. WiFi SSID and password are correct");
+    ESP_LOGE(TAG, "  2. WiFi router is available");
+    ESP_LOGE(TAG, "  3. ESP32 is within WiFi range");
+    return false;
 }

@@ -117,43 +117,66 @@ static bool send_rtsp_response(int socket, const char* response, ...) {
     return sent == len;
 }
 
-// 发送RTP包
-static bool send_rtp_packet(int socket, const uint8_t* data, size_t len, uint32_t timestamp, uint16_t seq) {
-    // RTP头部 (12字节)
-    uint8_t rtp_header[12];
-    rtp_header[0] = 0x80;  // Version=2, Padding=0, Extension=0, CSRC=0
-    rtp_header[1] = 0x60;  // Marker=1, Payload=96 (dynamic RGB565)
-    rtp_header[2] = (seq >> 8) & 0xFF;
-    rtp_header[3] = seq & 0xFF;
-    rtp_header[4] = (timestamp >> 24) & 0xFF;
-    rtp_header[5] = (timestamp >> 16) & 0xFF;
-    rtp_header[6] = (timestamp >> 8) & 0xFF;
-    rtp_header[7] = timestamp & 0xFF;
-    rtp_header[8] = 0x12;  // SSRC (随机)
-    rtp_header[9] = 0x34;
-    rtp_header[10] = 0x56;
-    rtp_header[11] = 0x78;
-    
-    // TCP interleaved frame header (4字节)
-    uint8_t interleaved[4];
-    interleaved[0] = 0x24;  // '$'
-    interleaved[1] = 0;      // Channel 0 (video)
-    interleaved[2] = (len + 12) >> 8;
-    interleaved[3] = (len + 12) & 0xFF;
-    
-    // 发送数据
-    if (send(socket, interleaved, 4, 0) != 4) {
+// 发送RGB565帧 - 简化版本，不用RTP封装
+static bool send_rgb565_frame(int socket, const uint8_t* data, size_t len) {
+    // 检查数据长度
+    if (len != 640 * 480 * 2) {
+        ESP_LOGW(TAG, "Invalid frame size: %zu, expected: %d", len, 640 * 480 * 2);
         return false;
     }
-    
-    if (send(socket, rtp_header, 12, 0) != 12) {
+
+    // 简单的帧同步头 (8字节)
+    uint8_t frame_header[8];
+    frame_header[0] = 0xAA;  // 帧开始标记
+    frame_header[1] = 0x55;
+    frame_header[2] = 0xFF;  // 帧类型: RGB565
+    frame_header[3] = 0xFE;
+    frame_header[4] = (len >> 24) & 0xFF;  // 数据长度 (4字节)
+    frame_header[5] = (len >> 16) & 0xFF;
+    frame_header[6] = (len >> 8) & 0xFF;
+    frame_header[7] = len & 0xFF;
+
+    // 发送帧头
+    int sent = send(socket, frame_header, 8, MSG_NOSIGNAL);
+    if (sent != 8) {
+        ESP_LOGE(TAG, "Failed to send frame header: sent=%d, errno=%d", sent, errno);
         return false;
     }
-    
-    if (send(socket, data, len, 0) != (int)len) {
-        return false;
+
+    // 分块发送图像数据
+    const size_t chunk_size = 1024; // 1KB块大小
+    size_t remaining = len;
+    size_t offset = 0;
+    int total_sent = 8;
+
+    while (remaining > 0) {
+        size_t to_send = (remaining > chunk_size) ? chunk_size : remaining;
+
+        sent = send(socket, data + offset, to_send, MSG_NOSIGNAL);
+        if (sent < 0) {
+            ESP_LOGE(TAG, "Failed to send data chunk at offset %zu: errno=%d", offset, errno);
+            return false;
+        }
+
+        if ((size_t)sent != to_send) {
+            ESP_LOGW(TAG, "Partial chunk send: sent=%d, expected=%zu at offset %zu", sent, to_send, offset);
+            offset += sent;
+            remaining -= sent;
+            total_sent += sent;
+            continue;
+        }
+
+        offset += sent;
+        remaining -= sent;
+        total_sent += sent;
+
+        // 在块之间添加小延迟
+        if (remaining > 0) {
+            vTaskDelay(pdMS_TO_TICKS(1));
+        }
     }
-    
+
+    ESP_LOGI(TAG, "RGB565 frame sent: %d bytes", total_sent);
     return true;
 }
 
@@ -174,13 +197,26 @@ static void handle_rtsp_client(int client_socket, const char* client_ip) {
             break;
         }
     }
-    
+
     if (!client) {
         ESP_LOGW(TAG, "Maximum clients reached");
         close(client_socket);
         return;
     }
-    
+
+    // 优化客户端socket设置
+    int keepalive = 1;
+    setsockopt(client_socket, SOL_SOCKET, SO_KEEPALIVE, &keepalive, sizeof(keepalive));
+
+    int tcp_nodelay = 1;
+    setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, &tcp_nodelay, sizeof(tcp_nodelay));
+
+    int rcv_buf_size = 65536; // 64KB接收缓冲区
+    setsockopt(client_socket, SOL_SOCKET, SO_RCVBUF, &rcv_buf_size, sizeof(rcv_buf_size));
+
+    int snd_buf_size = 65536; // 64KB发送缓冲区
+    setsockopt(client_socket, SOL_SOCKET, SO_SNDBUF, &snd_buf_size, sizeof(snd_buf_size));
+
     // 初始化客户端
     client->socket = client_socket;
     client->connected = true;
@@ -257,7 +293,7 @@ static void rtsp_stream_task(void* arg) {
     
     while (rtsp_server.running) {
         // 等待帧数据
-        if (xQueueReceive(rtsp_server.frame_queue, &frame, pdMS_TO_TICKS(100))) {
+        if (xQueueReceive(rtsp_server.frame_queue, &frame, pdMS_TO_TICKS(200))) {
             if (!frame) {
                 continue;
             }
@@ -279,15 +315,18 @@ static void rtsp_stream_task(void* arg) {
             // 发送给所有播放中的客户端
             for (int i = 0; i < RTSP_MAX_CLIENTS; i++) {
                 if (rtsp_server.clients[i].connected && rtsp_server.clients[i].playing) {
-                    if (!send_rtp_packet(rtsp_server.clients[i].socket, frame->buf, frame->len, timestamp, sequence)) {
-                        ESP_LOGW(TAG, "Failed to send frame to client %d", i);
+                    if (!send_rgb565_frame(rtsp_server.clients[i].socket, frame->buf, frame->len)) {
+                        ESP_LOGW(TAG, "Failed to send frame to client %d, disconnecting", i);
                         rtsp_server.clients[i].playing = false;
+                        rtsp_server.clients[i].connected = false;
+                        close(rtsp_server.clients[i].socket);
+                        rtsp_server.clients[i].socket = -1;
                     }
                 }
             }
             
             sequence++;
-            timestamp += 90000 / 10;  // 假设10fps，时间戳单位90kHz
+            timestamp += 90000 / 5;   // 假设5fps，时间戳单位90kHz
             last_frame_time = xTaskGetTickCount();
             
             esp_camera_fb_return(frame);
@@ -295,7 +334,7 @@ static void rtsp_stream_task(void* arg) {
         
         // 帧率控制
         TickType_t current_time = xTaskGetTickCount();
-        if (current_time - last_frame_time < pdMS_TO_TICKS(100)) {  // 10fps
+        if (current_time - last_frame_time < pdMS_TO_TICKS(200)) {  // 5fps
             vTaskDelay(pdMS_TO_TICKS(10));
         }
     }
