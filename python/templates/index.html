@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32-S3 Camera RTSP Stream Viewer</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        .main-container {
+            padding: 2rem;
+        }
+        
+        .video-container {
+            background: #000;
+            border-radius: 15px;
+            overflow: hidden;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.3);
+            position: relative;
+        }
+        
+        .video-stream {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        
+        .control-panel {
+            background: rgba(255,255,255,0.95);
+            border-radius: 15px;
+            padding: 1.5rem;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            backdrop-filter: blur(10px);
+        }
+        
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+            animation: pulse 2s infinite;
+        }
+        
+        .status-connected {
+            background-color: #28a745;
+        }
+        
+        .status-disconnected {
+            background-color: #dc3545;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        
+        .btn-custom {
+            border-radius: 25px;
+            padding: 0.5rem 1.5rem;
+            font-weight: 500;
+            transition: all 0.3s ease;
+        }
+        
+        .btn-custom:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+        
+        .info-card {
+            background: rgba(255,255,255,0.9);
+            border-radius: 10px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            border-left: 4px solid #007bff;
+        }
+        
+        .header-title {
+            color: white;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+            font-weight: 300;
+            margin-bottom: 2rem;
+        }
+        
+        .overlay-info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 5px;
+            font-size: 0.9rem;
+            z-index: 10;
+        }
+        
+        .snapshot-modal .modal-content {
+            background: #1a1a1a;
+            border: none;
+        }
+        
+        .snapshot-modal .modal-header {
+            border-bottom: 1px solid #333;
+        }
+        
+        .snapshot-modal .modal-body {
+            padding: 0;
+        }
+        
+        .snapshot-image {
+            width: 100%;
+            height: auto;
+        }
+        
+        .loading-spinner {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 1.2rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid main-container">
+        <div class="row">
+            <div class="col-12">
+                <h1 class="text-center header-title">
+                    <i class="fas fa-video"></i> ESP32-S3 Camera RTSP Stream Viewer
+                </h1>
+            </div>
+        </div>
+        
+        <div class="row">
+            <!-- 视频显示区域 -->
+            <div class="col-lg-8 mb-4">
+                <div class="video-container">
+                    <div class="overlay-info">
+                        <span class="status-indicator" id="statusIndicator"></span>
+                        <span id="statusText">未连接</span>
+                        <span class="ms-3" id="fpsInfo">FPS: 0</span>
+                    </div>
+                    <div class="loading-spinner" id="loadingSpinner" style="display: none;">
+                        <i class="fas fa-spinner fa-spin"></i> 连接中...
+                    </div>
+                    <img id="videoStream" class="video-stream" src="/video_feed" alt="Video Stream">
+                </div>
+            </div>
+            
+            <!-- 控制面板 -->
+            <div class="col-lg-4">
+                <div class="control-panel">
+                    <h5 class="mb-3">
+                        <i class="fas fa-cogs"></i> 控制面板
+                    </h5>
+                    
+                    <!-- RTSP连接 -->
+                    <div class="mb-3">
+                        <label for="rtspUrl" class="form-label">RTSP 流地址</label>
+                        <div class="input-group">
+                            <input type="text" class="form-control" id="rtspUrl" 
+                                   placeholder="rtsp://192.168.1.100:8554/stream" 
+                                   value="rtsp://192.168.1.100:8554/stream">
+                            <button class="btn btn-primary btn-custom" type="button" id="connectBtn">
+                                <i class="fas fa-plug"></i> 连接
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- 控制按钮 -->
+                    <div class="d-grid gap-2 mb-3">
+                        <button class="btn btn-success btn-custom" id="snapshotBtn" disabled>
+                            <i class="fas fa-camera"></i> 拍摄快照
+                        </button>
+                        <button class="btn btn-warning btn-custom" id="recordBtn" disabled>
+                            <i class="fas fa-record-vinyl"></i> 开始录制
+                        </button>
+                        <button class="btn btn-danger btn-custom" id="disconnectBtn" disabled>
+                            <i class="fas fa-unlink"></i> 断开连接
+                        </button>
+                    </div>
+                    
+                    <!-- 状态信息 -->
+                    <div class="info-card">
+                        <h6><i class="fas fa-info-circle"></i> 状态信息</h6>
+                        <div class="small">
+                            <div><strong>连接状态:</strong> <span id="connectionStatus">未连接</span></div>
+                            <div><strong>RTSP URL:</strong> <span id="currentUrl">-</span></div>
+                            <div><strong>帧率:</strong> <span id="currentFps">0</span> FPS</div>
+                            <div><strong>录制状态:</strong> <span id="recordingStatus">未录制</span></div>
+                        </div>
+                    </div>
+                    
+                    <!-- 使用说明 -->
+                    <div class="info-card">
+                        <h6><i class="fas fa-question-circle"></i> 使用说明</h6>
+                        <div class="small">
+                            <ol>
+                                <li>输入ESP32-S3的RTSP流地址</li>
+                                <li>点击"连接"按钮开始接收视频流</li>
+                                <li>使用"拍摄快照"保存当前画面</li>
+                                <li>使用"开始录制"录制视频</li>
+                                <li>支持实时查看FPS和连接状态</li>
+                            </ol>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 快照模态框 -->
+    <div class="modal fade snapshot-modal" id="snapshotModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title text-white">
+                        <i class="fas fa-camera"></i> 快照预览
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <img id="snapshotImage" class="snapshot-image" src="" alt="Snapshot">
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                    <a id="downloadLink" class="btn btn-primary" download>
+                        <i class="fas fa-download"></i> 下载
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 提示消息 -->
+    <div class="position-fixed top-0 end-0 p-3" style="z-index: 11">
+        <div id="alertContainer"></div>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script>
+        class ESP32CameraViewer {
+            constructor() {
+                this.isConnected = false;
+                this.isRecording = false;
+                this.socket = io();
+                
+                this.initializeElements();
+                this.bindEvents();
+                this.setupSocketIO();
+                this.updateStatus();
+            }
+            
+            initializeElements() {
+                this.elements = {
+                    videoStream: document.getElementById('videoStream'),
+                    rtspUrl: document.getElementById('rtspUrl'),
+                    connectBtn: document.getElementById('connectBtn'),
+                    disconnectBtn: document.getElementById('disconnectBtn'),
+                    snapshotBtn: document.getElementById('snapshotBtn'),
+                    recordBtn: document.getElementById('recordBtn'),
+                    statusIndicator: document.getElementById('statusIndicator'),
+                    statusText: document.getElementById('statusText'),
+                    fpsInfo: document.getElementById('fpsInfo'),
+                    loadingSpinner: document.getElementById('loadingSpinner'),
+                    connectionStatus: document.getElementById('connectionStatus'),
+                    currentUrl: document.getElementById('currentUrl'),
+                    currentFps: document.getElementById('currentFps'),
+                    recordingStatus: document.getElementById('recordingStatus'),
+                    snapshotModal: new bootstrap.Modal(document.getElementById('snapshotModal')),
+                    snapshotImage: document.getElementById('snapshotImage'),
+                    downloadLink: document.getElementById('downloadLink')
+                };
+            }
+            
+            bindEvents() {
+                this.elements.connectBtn.addEventListener('click', () => this.connect());
+                this.elements.disconnectBtn.addEventListener('click', () => this.disconnect());
+                this.elements.snapshotBtn.addEventListener('click', () => this.takeSnapshot());
+                this.elements.recordBtn.addEventListener('click', () => this.toggleRecording());
+                
+                // 回车键连接
+                this.elements.rtspUrl.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') {
+                        this.connect();
+                    }
+                });
+            }
+            
+            setupSocketIO() {
+                this.socket.on('connect', () => {
+                    console.log('Connected to server');
+                });
+                
+                this.socket.on('status', (data) => {
+                    this.updateStatusFromServer(data);
+                });
+            }
+            
+            async connect() {
+                const rtspUrl = this.elements.rtspUrl.value.trim();
+                if (!rtspUrl) {
+                    this.showAlert('请输入RTSP流地址', 'warning');
+                    return;
+                }
+                
+                this.setLoading(true);
+                
+                try {
+                    const response = await fetch('/api/connect', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ rtsp_url: rtspUrl })
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        this.isConnected = true;
+                        this.showAlert('连接成功！', 'success');
+                        this.updateStatus();
+                    } else {
+                        this.showAlert(`连接失败: ${result.message}`, 'danger');
+                    }
+                } catch (error) {
+                    console.error('Connection error:', error);
+                    this.showAlert('连接错误，请检查网络', 'danger');
+                } finally {
+                    this.setLoading(false);
+                }
+            }
+            
+            async disconnect() {
+                try {
+                    const response = await fetch('/api/disconnect', {
+                        method: 'POST'
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        this.isConnected = false;
+                        this.isRecording = false;
+                        this.showAlert('已断开连接', 'info');
+                        this.updateStatus();
+                    }
+                } catch (error) {
+                    console.error('Disconnect error:', error);
+                }
+            }
+            
+            async takeSnapshot() {
+                try {
+                    const response = await fetch('/api/snapshot', {
+                        method: 'POST'
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        this.elements.snapshotImage.src = result.image;
+                        this.elements.downloadLink.href = result.image;
+                        this.elements.downloadLink.download = result.filename;
+                        this.elements.snapshotModal.show();
+                        this.showAlert(`快照已保存: ${result.filename}`, 'success');
+                    } else {
+                        this.showAlert(`拍摄失败: ${result.message}`, 'danger');
+                    }
+                } catch (error) {
+                    console.error('Snapshot error:', error);
+                    this.showAlert('拍摄快照失败', 'danger');
+                }
+            }
+            
+            async toggleRecording() {
+                const action = this.isRecording ? 'stop' : 'start';
+                
+                try {
+                    const response = await fetch('/api/record', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ action })
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        this.isRecording = !this.isRecording;
+                        this.showAlert(result.message, 'success');
+                        this.updateStatus();
+                    } else {
+                        this.showAlert(`录制操作失败: ${result.message}`, 'danger');
+                    }
+                } catch (error) {
+                    console.error('Recording error:', error);
+                    this.showAlert('录制操作失败', 'danger');
+                }
+            }
+            
+            updateStatus() {
+                // 更新状态指示器
+                if (this.isConnected) {
+                    this.elements.statusIndicator.className = 'status-indicator status-connected';
+                    this.elements.statusText.textContent = '已连接';
+                    this.elements.connectionStatus.textContent = '已连接';
+                    this.elements.connectBtn.disabled = true;
+                    this.elements.disconnectBtn.disabled = false;
+                    this.elements.snapshotBtn.disabled = false;
+                    this.elements.recordBtn.disabled = false;
+                } else {
+                    this.elements.statusIndicator.className = 'status-indicator status-disconnected';
+                    this.elements.statusText.textContent = '未连接';
+                    this.elements.connectionStatus.textContent = '未连接';
+                    this.elements.connectBtn.disabled = false;
+                    this.elements.disconnectBtn.disabled = true;
+                    this.elements.snapshotBtn.disabled = true;
+                    this.elements.recordBtn.disabled = true;
+                }
+                
+                // 更新录制按钮
+                if (this.isRecording) {
+                    this.elements.recordBtn.className = 'btn btn-danger btn-custom';
+                    this.elements.recordBtn.innerHTML = '<i class="fas fa-stop"></i> 停止录制';
+                    this.elements.recordingStatus.textContent = '录制中';
+                } else {
+                    this.elements.recordBtn.className = 'btn btn-warning btn-custom';
+                    this.elements.recordBtn.innerHTML = '<i class="fas fa-record-vinyl"></i> 开始录制';
+                    this.elements.recordingStatus.textContent = '未录制';
+                }
+            }
+            
+            updateStatusFromServer(data) {
+                this.isConnected = data.is_streaming;
+                this.elements.currentUrl.textContent = data.rtsp_url || '-';
+                this.elements.currentFps.textContent = data.fps.toFixed(1);
+                this.elements.fpsInfo.textContent = `FPS: ${data.fps.toFixed(1)}`;
+                this.isRecording = data.is_recording;
+                this.updateStatus();
+            }
+            
+            setLoading(loading) {
+                this.elements.loadingSpinner.style.display = loading ? 'block' : 'none';
+                this.elements.connectBtn.disabled = loading;
+            }
+            
+            showAlert(message, type) {
+                const alertHtml = `
+                    <div class="alert alert-${type} alert-dismissible fade show" role="alert">
+                        ${message}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>
+                `;
+                
+                const container = document.getElementById('alertContainer');
+                container.insertAdjacentHTML('beforeend', alertHtml);
+                
+                // 自动移除提示
+                setTimeout(() => {
+                    const alert = container.lastElementChild;
+                    if (alert) {
+                        const bsAlert = new bootstrap.Alert(alert);
+                        bsAlert.close();
+                    }
+                }, 5000);
+            }
+        }
+        
+        // 初始化应用
+        document.addEventListener('DOMContentLoaded', () => {
+            new ESP32CameraViewer();
+        });
+    </script>
+</body>
+</html>

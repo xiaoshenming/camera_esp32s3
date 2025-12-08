@@ -1,0 +1,17 @@
+name: esp32-camera-rtsp
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.11
+  - flask
+  - opencv
+  - numpy
+  - websocket-client
+  - flask-socketio
+  - pillow
+  - requests
+  - pip
+  - pip:
+    - opencv-python-headless
+    - python-rtsp
