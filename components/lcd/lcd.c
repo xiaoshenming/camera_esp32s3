@@ -15,7 +15,7 @@ static const char *TAG = "lcd";
 #define BSP_I2C_SDA           (GPIO_NUM_1)   // SDA引脚
 #define BSP_I2C_SCL           (GPIO_NUM_2)   // SCL引脚
 #define BSP_I2C_NUM           (0)            // I2C外设
-#define BSP_I2C_FREQ_HZ       100000         // 100kHz
+#define BSP_I2C_FREQ_HZ       400000         // 400kHz - 提升I2C频率以优化性能
 
 // PCA9557 IO扩展芯片配置
 #define PCA9557_INPUT_PORT              0x00

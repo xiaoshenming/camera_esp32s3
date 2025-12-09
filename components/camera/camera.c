@@ -251,7 +251,7 @@ bool camera_start_lcd_display(void)
     ret = xTaskCreatePinnedToCore(
         fps_monitor_task, 
         "fps_monitor", 
-        2 * 1024, 
+        4 * 1024,  // 增加栈大小防止溢出
         NULL, 
         4, 
         &fps_monitor_task_handle, 
