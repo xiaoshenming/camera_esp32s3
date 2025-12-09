@@ -235,20 +235,29 @@ class FPVReceiver:
                 logger.error(f"帧数据大小错误: {len(frame_data)}, 期望: {MAX_FRAME_SIZE}")
                 return None
             
-            # 直接使用大端序解码（根据日志分析，大端序是正确的）
-            rgb565_be = np.frombuffer(frame_data, dtype=np.uint16).byteswap()  # 转换为大端序
+            # 尝试大端序解码（ESP32摄像头可能使用大端序）
+            rgb565_be = np.frombuffer(frame_data, dtype=np.uint16).byteswap()
             
-            # 大端序RGB565解码
-            r = ((rgb565_be >> 11) & 0x1F) << 3
-            g = ((rgb565_be >> 5) & 0x3F) << 2
-            b = (rgb565_be & 0x1F) << 3
+            # RGB565解码（大端序）
+            r5 = (rgb565_be >> 11) & 0x1F
+            g6 = (rgb565_be >> 5) & 0x3F
+            b5 = rgb565_be & 0x1F
+            
+            # 扩展到8位
+            r = (r5 << 3) | (r5 >> 2)
+            g = (g6 << 2) | (g6 >> 4)
+            b = (b5 << 3) | (b5 >> 2)
             
             # 确保值在有效范围内
             r, g, b = np.clip(r, 0, 255), np.clip(g, 0, 255), np.clip(b, 0, 255)
             
-            # 合并为RGB图像
+            # 重塑为图像尺寸
+            r = r.reshape(FRAME_HEIGHT, FRAME_WIDTH)
+            g = g.reshape(FRAME_HEIGHT, FRAME_WIDTH)
+            b = b.reshape(FRAME_HEIGHT, FRAME_WIDTH)
+            
+            # 合并为RGB图像（保持RGB顺序）
             rgb = np.stack([r, g, b], axis=-1)
-            rgb = rgb.reshape(FRAME_HEIGHT, FRAME_WIDTH, 3)
             
             return rgb.astype(np.uint8)
             
@@ -307,7 +316,13 @@ class FPVReceiver:
             if frame is not None:
                 # 存储当前帧用于Web流
                 self.current_frame = frame.copy()
-                print(f"🖼️ Web帧更新: {frame_num}, 尺寸: {frame.shape}")
+                
+                # 更新Web模式下的FPS统计
+                self.stats['frames_received'] += 1
+                self.stats['fps_frames'] += 1
+                self._update_fps()
+                
+                print(f"🖼️ Web帧更新: {frame_num}, 尺寸: {frame.shape}, FPS: {self.stats['fps']:.1f}")
             else:
                 print(f"❌ Web帧解码失败: {frame_num}")
                 
@@ -320,8 +335,12 @@ class FPVReceiver:
         while True:
             if self.current_frame is not None:
                 try:
+                    # 放大视频帧到更大的尺寸
+                    enlarged_frame = cv2.resize(self.current_frame, (640, 480), 
+                                            interpolation=cv2.INTER_NEAREST)
+                    
                     # 将OpenCV图像转换为JPEG
-                    ret, buffer = cv2.imencode('.jpg', self.current_frame, 
+                    ret, buffer = cv2.imencode('.jpg', enlarged_frame, 
                                             [cv2.IMWRITE_JPEG_QUALITY, 85])
                     if ret:
                         frame = buffer.tobytes()
@@ -334,7 +353,7 @@ class FPVReceiver:
                         # 每100帧打印一次状态
                         frame_count += 1
                         if frame_count % 100 == 0:
-                            print(f"🎥 已生成 {frame_count} 帧视频流")
+                            print(f"🎥 已生成 {frame_count} 帧视频流 (放大到640x480)")
                     else:
                         print("❌ JPEG编码失败")
                         
