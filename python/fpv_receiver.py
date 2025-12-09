@@ -63,6 +63,9 @@ class FPVReceiver:
         # 帧队列
         self.frame_queue = queue.Queue(maxsize=1)  # 只保留最新帧
         
+        # Web视频流相关
+        self.current_frame = None
+        
         # 统计信息
         self.stats = {
             'frames_received': 0,
@@ -307,6 +310,56 @@ class FPVReceiver:
             logger.info(f"FPS: {self.stats['fps']:.1f}, "
                        f"接收帧: {self.stats['frames_received']}, "
                        f"丢弃帧: {self.stats['frames_dropped']}")
+    
+    def _web_decode_and_display(self, frame_num: int, frame_data: bytes):
+        """Web模式下的解码和显示"""
+        try:
+            # 解码RGB565数据
+            frame = self._decode_rgb565(frame_data)
+            if frame is not None:
+                # 存储当前帧用于Web流
+                self.current_frame = frame.copy()
+                print(f"🖼️ Web帧更新: {frame_num}, 尺寸: {frame.shape}")
+            else:
+                print(f"❌ Web帧解码失败: {frame_num}")
+                
+        except Exception as e:
+            print(f"❌ Web解码错误: {e}")
+    
+    def _generate_frames(self):
+        """生成MJPEG帧"""
+        print("🎥 开始生成MJPEG视频流...")
+        while True:
+            if self.current_frame is not None:
+                try:
+                    # 调试：检查当前帧状态
+                    print(f"📸 当前帧状态: 尺寸={self.current_frame.shape}, "
+                          f"数据类型={self.current_frame.dtype}, "
+                          f"值范围=[{self.current_frame.min()}-{self.current_frame.max()}]")
+                    
+                    # 将OpenCV图像转换为JPEG
+                    ret, buffer = cv2.imencode('.jpg', self.current_frame, 
+                                            [cv2.IMWRITE_JPEG_QUALITY, 85])
+                    if ret:
+                        frame = buffer.tobytes()
+                        print(f"📦 JPEG编码成功: {len(frame)} 字节")
+                        
+                        # 生成MJPEG流
+                        mjpeg_frame = (b'--frame\r\n'
+                                     b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+                        print(f"🎬 MJPEG帧生成: {len(mjpeg_frame)} 字节")
+                        yield mjpeg_frame
+                    else:
+                        print("❌ JPEG编码失败")
+                        
+                except Exception as e:
+                    print(f"❌ 视频帧生成错误: {e}")
+                    import traceback
+                    traceback.print_exc()
+            else:
+                print("⏳ 等待帧数据...")
+            
+            time.sleep(0.033)  # ~30 FPS
     
     def get_stats(self) -> dict:
         """获取统计信息"""
