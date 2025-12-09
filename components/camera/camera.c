@@ -27,13 +27,21 @@ static const char *TAG = "camera";
 #define CAMERA_PIN_HREF 46
 #define CAMERA_PIN_PCLK 7
 
-#define XCLK_FREQ_HZ 24000000
+#define XCLK_FREQ_HZ 40000000  // 提升到40MHz以提高帧率
 
 // LCD显示队列句柄
 static QueueHandle_t xQueueLCDFrame = NULL;
 static TaskHandle_t camera_task_handle = NULL;
 static TaskHandle_t lcd_task_handle = NULL;
+static TaskHandle_t fps_monitor_task_handle = NULL;
 static bool display_running = false;
+
+// 帧率统计变量
+static uint32_t camera_frame_count = 0;
+static uint32_t lcd_frame_count = 0;
+static uint32_t last_fps_time = 0;
+static float camera_fps = 0.0f;
+static float lcd_fps = 0.0f;
 
 bool camera_init(void)
 {
@@ -114,12 +122,45 @@ static void camera_lcd_task(void *arg)
             if (frame) {
                 // 显示摄像头帧到LCD
                 lcd_draw_camera_frame(0, 0, frame->width, frame->height, frame->buf);
+                lcd_frame_count++;  // 统计LCD显示帧数
                 esp_camera_fb_return(frame);
             }
         }
     }
     
     ESP_LOGI(TAG, "LCD display task stopped");
+    vTaskDelete(NULL);
+}
+
+// 帧率监控任务
+static void fps_monitor_task(void *arg)
+{
+    ESP_LOGI(TAG, "FPS monitor task started");
+    
+    // 初始化时间戳
+    last_fps_time = xTaskGetTickCount();
+    
+    while (display_running) {
+        vTaskDelay(pdMS_TO_TICKS(1000));  // 每秒计算一次
+        
+        // 计算经过的时间（秒）
+        uint32_t current_time = xTaskGetTickCount();
+        float elapsed_time = (current_time - last_fps_time) / 1000.0f;
+        
+        // 计算FPS
+        camera_fps = camera_frame_count / elapsed_time;
+        lcd_fps = lcd_frame_count / elapsed_time;
+        
+        // 输出帧率信息
+        ESP_LOGI(TAG, "Camera FPS: %.1f, LCD FPS: %.1f", camera_fps, lcd_fps);
+        
+        // 重置计数器
+        camera_frame_count = 0;
+        lcd_frame_count = 0;
+        last_fps_time = current_time;
+    }
+    
+    ESP_LOGI(TAG, "FPS monitor task stopped");
     vTaskDelete(NULL);
 }
 
@@ -131,6 +172,7 @@ static void camera_capture_task(void *arg)
     while (display_running) {
         camera_fb_t *frame = esp_camera_fb_get();
         if (frame) {
+            camera_frame_count++;  // 统计摄像头捕获帧数
             // 将帧发送到LCD显示队列
             if (!xQueueSend(xQueueLCDFrame, &frame, pdMS_TO_TICKS(10))) {
                 // 如果队列满了，释放帧
@@ -205,6 +247,29 @@ bool camera_start_lcd_display(void)
         return false;
     }
     
+    // 创建帧率监控任务
+    ret = xTaskCreatePinnedToCore(
+        fps_monitor_task, 
+        "fps_monitor", 
+        2 * 1024, 
+        NULL, 
+        4, 
+        &fps_monitor_task_handle, 
+        1
+    );
+    
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create FPS monitor task");
+        display_running = false;
+        vTaskDelete(camera_task_handle);
+        camera_task_handle = NULL;
+        vTaskDelete(lcd_task_handle);
+        lcd_task_handle = NULL;
+        vQueueDelete(xQueueLCDFrame);
+        xQueueLCDFrame = NULL;
+        return false;
+    }
+    
     ESP_LOGI(TAG, "Camera LCD display started successfully");
     return true;
 }
@@ -230,6 +295,11 @@ bool camera_stop_lcd_display(void)
     if (lcd_task_handle) {
         vTaskDelete(lcd_task_handle);
         lcd_task_handle = NULL;
+    }
+    
+    if (fps_monitor_task_handle) {
+        vTaskDelete(fps_monitor_task_handle);
+        fps_monitor_task_handle = NULL;
     }
     
     // 清理队列
