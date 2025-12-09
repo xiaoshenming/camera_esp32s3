@@ -229,37 +229,30 @@ class FPVReceiver:
             return None
     
     def _decode_rgb565_cpu(self, frame_data: bytes) -> np.ndarray:
-        """CPU解码RGB565数据"""
+        """CPU解码RGB565数据 - 第一版方法（能看清楚图像）"""
         try:
             if len(frame_data) != MAX_FRAME_SIZE:
                 logger.error(f"帧数据大小错误: {len(frame_data)}, 期望: {MAX_FRAME_SIZE}")
                 return None
             
-            # 尝试大端序解码（ESP32摄像头可能使用大端序）
+            # 第一版解码方法：大端序RGB565解码
             rgb565_be = np.frombuffer(frame_data, dtype=np.uint16).byteswap()
             
-            # RGB565解码（大端序）
-            r5 = (rgb565_be >> 11) & 0x1F
-            g6 = (rgb565_be >> 5) & 0x3F
-            b5 = rgb565_be & 0x1F
+            # 提取RGB分量
+            r = ((rgb565_be >> 11) & 0x1F) << 3
+            g = ((rgb565_be >> 5) & 0x3F) << 2
+            b = (rgb565_be & 0x1F) << 3
             
-            # 扩展到8位
-            r = (r5 << 3) | (r5 >> 2)
-            g = (g6 << 2) | (g6 >> 4)
-            b = (b5 << 3) | (b5 >> 2)
-            
-            # 确保值在有效范围内
-            r, g, b = np.clip(r, 0, 255), np.clip(g, 0, 255), np.clip(b, 0, 255)
-            
-            # 重塑为图像尺寸
-            r = r.reshape(FRAME_HEIGHT, FRAME_WIDTH)
-            g = g.reshape(FRAME_HEIGHT, FRAME_WIDTH)
-            b = b.reshape(FRAME_HEIGHT, FRAME_WIDTH)
-            
-            # 合并为RGB图像（保持RGB顺序）
+            # 创建RGB图像
             rgb = np.stack([r, g, b], axis=-1)
             
-            return rgb.astype(np.uint8)
+            # 重塑为图像尺寸
+            rgb = rgb.reshape(FRAME_HEIGHT, FRAME_WIDTH, 3)
+            
+            # 转换为BGR供OpenCV使用
+            bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+            
+            return bgr.astype(np.uint8)
             
         except Exception as e:
             logger.error(f"CPU解码错误: {e}")
