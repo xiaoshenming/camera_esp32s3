@@ -606,22 +606,9 @@ bool camera_start_fpv_mode(void)
     
     ESP_LOGI(TAG, "Starting FPV mode...");
     
-    // 初始化WiFi
-    if (!wifi_init_sta(WIFI_SSID, WIFI_PASSWORD)) {
-        ESP_LOGE(TAG, "Failed to initialize WiFi");
-        return false;
-    }
-    
-    // 等待WiFi连接
-    int retry_count = 0;
-    while (!wifi_is_connected() && retry_count < 20) {
-        vTaskDelay(pdMS_TO_TICKS(500));
-        retry_count++;
-        ESP_LOGI(TAG, "Waiting for WiFi connection... %d/20", retry_count);
-    }
-    
+    // 检查WiFi是否已连接
     if (!wifi_is_connected()) {
-        ESP_LOGE(TAG, "WiFi connection failed");
+        ESP_LOGE(TAG, "WiFi not connected. Please ensure WiFi is initialized first.");
         return false;
     }
     

@@ -1,8 +1,8 @@
 idf_component_register(SRCS "wifi.c"
                     INCLUDE_DIRS "."
-                    REQUIRES esp_wifi esp_netif esp_event lwip)
+                    REQUIRES esp_wifi esp_netif esp_event lwip nvs_flash)
 
 target_compile_definitions(${COMPONENT_LIB} PUBLIC
     -DWIFI_SSID=\"309Study\"
-    -DWIFI_PASSWORD=\"ai12321\"
+    -DWIFI_PASSWORD=\"ai123321\"
 )

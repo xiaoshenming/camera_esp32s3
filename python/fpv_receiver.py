@@ -12,7 +12,7 @@ import numpy as np
 import cv2
 from collections import deque
 from dataclasses import dataclass
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict
 import queue
 import argparse
 import logging
@@ -31,7 +31,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # 常量定义
-UDP_MAGIC = 0xFPFV  # 魔数
+UDP_MAGIC = 0x5056  # 魔数 (PV in hex)
 FRAME_WIDTH = 320
 FRAME_HEIGHT = 240
 PIXEL_FORMAT = 'RGB565'

@@ -62,26 +62,50 @@ class WebViewer:
                 if self.receiver:
                     self.receiver.stop()
                 
-                # 创建新接收器
-                self.receiver = FPVReceiver(
-                    bind_ip=bind_ip,
-                    port=port,
-                    enable_gpu=enable_gpu,
-                    display_window=False  # Web模式下不显示窗口
-                )
+                # 尝试多个端口
+                ports_to_try = [port] if port != 8888 else [8888, 8889, 8890, 8891]
+                receiver_started = False
+                last_error = None
                 
-                # 修改接收器以支持Web显示
-                self.receiver._decode_and_display = self._web_decode_and_display
+                for try_port in ports_to_try:
+                    try:
+                        # 创建新接收器
+                        self.receiver = FPVReceiver(
+                            bind_ip=bind_ip,
+                            port=try_port,
+                            enable_gpu=enable_gpu,
+                            display_window=False  # Web模式下不显示窗口
+                        )
+                        
+                        # 修改接收器以支持Web显示
+                        self.receiver._decode_and_display = self._web_decode_and_display
+                        
+                        # 启动接收器
+                        self.receiver.start()
+                        
+                        logger.info(f"Web接收器已启动，监听 {bind_ip}:{try_port}")
+                        
+                        return jsonify({
+                            'status': 'success',
+                            'message': f'接收器已启动，监听 {bind_ip}:{try_port}',
+                            'actual_port': try_port
+                        })
+                        
+                    except Exception as e:
+                        last_error = e
+                        logger.warning(f"端口 {try_port} 启动失败: {e}")
+                        if self.receiver:
+                            self.receiver.stop()
+                            self.receiver = None
+                        continue
                 
-                # 启动接收器
-                self.receiver.start()
-                
-                logger.info(f"Web接收器已启动，监听 {bind_ip}:{port}")
-                
+                # 所有端口都失败
+                error_msg = f'所有端口启动失败，最后错误: {str(last_error)}'
+                logger.error(error_msg)
                 return jsonify({
-                    'status': 'success',
-                    'message': f'接收器已启动，监听 {bind_ip}:{port}'
-                })
+                    'status': 'error',
+                    'message': error_msg
+                }), 500
                 
             except Exception as e:
                 logger.error(f"启动接收器失败: {e}")

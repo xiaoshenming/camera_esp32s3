@@ -38,14 +38,21 @@ void app_main(void)
     }
     
     // 初始化WiFi组件（用于FPV图传）
-    if (!wifi_init()) {
+    if (!wifi_init_sta(WIFI_SSID, WIFI_PASSWORD)) {
         ESP_LOGE("main", "WiFi initialization failed");
         return;
     }
     
     // 等待WiFi连接
     ESP_LOGI("main", "Waiting for WiFi connection...");
-    if (!wifi_wait_connected()) {
+    int retry_count = 0;
+    while (!wifi_is_connected() && retry_count < 20) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+        retry_count++;
+        ESP_LOGI("main", "Waiting for WiFi connection... %d/20", retry_count);
+    }
+    
+    if (!wifi_is_connected()) {
         ESP_LOGE("main", "WiFi connection failed");
         return;
     }
@@ -93,8 +100,10 @@ void app_main(void)
     // 获取WiFi信息用于显示
     wifi_info_t wifi_info;
     if (wifi_get_info(&wifi_info)) {
-        ESP_LOGI("main", "WiFi Info - SSID: %s, IP: " IPSTR ", Channel: %d", 
-                   wifi_info.ssid, IP2STR(&wifi_info.ip), wifi_info.channel);
+        // 将uint32_t IP地址转换为点分十进制格式
+        uint8_t* ip_bytes = (uint8_t*)&wifi_info.ip;
+        ESP_LOGI("main", "WiFi Info - SSID: %s, IP: %d.%d.%d.%d, Channel: %d", 
+                  wifi_info.ssid, ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3], wifi_info.channel);
     }
     
     // 主循环

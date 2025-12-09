@@ -107,12 +107,6 @@ bool camera_start_fpv_mode(void);
  */
 bool camera_stop_fpv_mode(void);
 
-/**
- * @brief FPV传输任务
- * @param arg 任务参数
- */
-static void camera_fpv_task(void *arg);
-
 #ifdef __cplusplus
 }
 #endif

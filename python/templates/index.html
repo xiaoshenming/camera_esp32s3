@@ -346,7 +346,11 @@
                     document.getElementById('videoFeed').src = '/video_feed';
                     document.getElementById('stopBtn').disabled = false;
                     document.getElementById('snapshotSection').style.display = 'block';
-                    document.getElementById('bindAddress').textContent = `${bindIp}:${bindPort}`;
+                    
+                    // 使用实际端口（如果端口被占用，可能会使用不同的端口）
+                    const actualPort = result.actual_port || bindPort;
+                    document.getElementById('bindAddress').textContent = `${bindIp}:${actualPort}`;
+                    document.getElementById('bindPort').value = actualPort;
                     
                     // 开始统计更新
                     startStatsUpdate();

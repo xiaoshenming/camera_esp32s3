@@ -13,7 +13,7 @@ extern "C" {
 typedef struct {
     char ssid[32];
     char password[64];
-} wifi_config_t;
+} wifi_credentials_t;
 
 // UDP数据包头部结构体
 typedef struct __attribute__((packed)) {
@@ -23,7 +23,7 @@ typedef struct __attribute__((packed)) {
     uint16_t total_packets; // 总包数
 } udp_packet_header_t;
 
-#define UDP_MAGIC_NUMBER 0xFPFV
+#define UDP_MAGIC_NUMBER 0x5056
 #define UDP_PORT 8888
 #define MAX_UDP_PAYLOAD_SIZE 1024
 #define PACKETS_PER_FRAME ((320 * 240 * 2 + MAX_UDP_PAYLOAD_SIZE - 1) / MAX_UDP_PAYLOAD_SIZE)
@@ -71,6 +71,30 @@ char* wifi_get_local_ip(void);
  * @return true 成功，false 失败
  */
 bool wifi_send_camera_frame(const uint8_t* frame_data, size_t frame_size, uint16_t frame_id);
+
+// WiFi信息结构体
+typedef struct {
+    char ssid[32];
+    uint32_t ip;
+    uint8_t channel;
+} wifi_info_t;
+
+/**
+ * @brief 获取WiFi信息
+ * @param info WiFi信息输出结构体
+ * @return true 成功，false 失败
+ */
+bool wifi_get_info(wifi_info_t* info);
+
+/**
+ * @brief 获取WiFi统计信息
+ * @param frames_sent 发送帧数
+ * @param packets_sent 发送包数
+ * @param bytes_sent 发送字节数
+ * @param fps 帧率
+ * @return true 成功，false 失败
+ */
+bool wifi_get_stats(uint32_t* frames_sent, uint32_t* packets_sent, uint32_t* bytes_sent, float* fps);
 
 #ifdef __cplusplus
 }
