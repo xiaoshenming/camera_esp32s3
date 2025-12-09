@@ -1,45 +1,54 @@
 #!/usr/bin/env python3
 """
-ESP32 FPV Camera Web Viewer
-基于Flask的Web界面，支持实时视频流查看
+ESP32 FPV Camera Web Viewer - 简化版
+接收器在后台持续运行，前端只需配置ESP32地址
 """
 
 from flask import Flask, render_template, Response, request, jsonify
 import threading
 import time
-import json
 import logging
 from fpv_receiver import FPVReceiver
 import cv2
-import base64
-import io
-from PIL import Image
-import numpy as np
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class WebViewer:
-    """Web查看器类"""
+    """简化的Web查看器类"""
     
     def __init__(self, host='0.0.0.0', port=5000):
         self.host = host
         self.port = port
         self.app = Flask(__name__)
         self.receiver = None
-        self.current_frame = None
-        self.frame_lock = threading.Lock()
-        self.stats = {
-            'fps': 0.0,
-            'frames_complete': 0,
-            'frames_dropped': 0,
-            'packets_received': 0,
-            'last_update': time.time()
-        }
+        self.current_esp32_ip = '192.168.1.100'
+        
+        # 启动后台接收器
+        self._start_background_receiver()
         
         # 设置路由
         self._setup_routes()
+    
+    def _start_background_receiver(self):
+        """启动后台接收器"""
+        try:
+            # 创建接收器（后台模式）
+            self.receiver = FPVReceiver(
+                bind_ip='0.0.0.0',
+                port=8888,
+                enable_gpu=False,
+                display_window=False,  # 后台模式
+                esp32_ip=self.current_esp32_ip
+            )
+            
+            # 启动接收器
+            self.receiver.start()
+            logger.info("后台接收器已启动")
+            
+        except Exception as e:
+            logger.error(f"启动后台接收器失败: {e}")
     
     def _setup_routes(self):
         """设置Flask路由"""
@@ -49,175 +58,62 @@ class WebViewer:
             """主页"""
             return render_template('index.html')
         
-        @self.app.route('/start_receiver', methods=['POST'])
-        def start_receiver():
-            """启动接收器"""
+        @self.app.route('/update_esp32_config', methods=['POST'])
+        def update_esp32_config():
+            """更新ESP32配置"""
             try:
                 data = request.get_json()
-                bind_ip = data.get('bind_ip', '0.0.0.0')
-                esp32_ip = data.get('esp32_ip', '192.168.1.100')  # 新增ESP32 IP配置
-                port = int(data.get('port', 8888))
-                enable_gpu = data.get('enable_gpu', True)
+                esp32_ip = data.get('esp32_ip', '192.168.1.100')
                 
-                # 停止现有接收器
-                if self.receiver:
-                    self.receiver.stop()
+                # 更新ESP32 IP地址
+                self.current_esp32_ip = esp32_ip
+                self.receiver.esp32_ip = esp32_ip
                 
-                # 尝试多个端口
-                ports_to_try = [port] if port != 8888 else [8888, 8889, 8890, 8891]
-                receiver_started = False
-                last_error = None
-                
-                for try_port in ports_to_try:
-                    try:
-                        # 创建新接收器 - 强制禁用GPU以确保稳定性
-                        self.receiver = FPVReceiver(
-                            bind_ip=bind_ip,
-                            port=try_port,
-                            enable_gpu=False,  # 强制禁用GPU
-                            display_window=False,  # Web模式下不显示窗口
-                            esp32_ip=esp32_ip  # 传递ESP32 IP地址
-                        )
-                        
-                        # 修改接收器以支持Web显示
-                        self.receiver._web_decode_and_display = self._web_decode_and_display
-                        
-                        # 启动接收器
-                        self.receiver.start()
-                        
-                        logger.info(f"Web接收器已启动，监听 {bind_ip}:{try_port}")
-                        
-                        return jsonify({
-                            'status': 'success',
-                            'message': f'接收器已启动，监听 {bind_ip}:{try_port}',
-                            'actual_port': try_port
-                        })
-                        
-                    except Exception as e:
-                        last_error = e
-                        logger.warning(f"端口 {try_port} 启动失败: {e}")
-                        if self.receiver:
-                            self.receiver.stop()
-                            self.receiver = None
-                        continue
-                
-                # 所有端口都失败
-                error_msg = f'所有端口启动失败，最后错误: {str(last_error)}'
-                logger.error(error_msg)
-                return jsonify({
-                    'status': 'error',
-                    'message': error_msg
-                }), 500
-                
-            except Exception as e:
-                logger.error(f"启动接收器失败: {e}")
-                return jsonify({
-                    'status': 'error',
-                    'message': f'启动失败: {str(e)}'
-                }), 500
-        
-        @self.app.route('/stop_receiver', methods=['POST'])
-        def stop_receiver():
-            """停止接收器"""
-            try:
-                if self.receiver:
-                    self.receiver.stop()
-                    self.receiver = None
-                
-                with self.frame_lock:
-                    self.current_frame = None
+                logger.info(f"ESP32 IP地址已更新为: {esp32_ip}")
                 
                 return jsonify({
                     'status': 'success',
-                    'message': '接收器已停止'
+                    'message': f'ESP32地址已更新为 {esp32_ip}'
                 })
                 
             except Exception as e:
-                logger.error(f"停止接收器失败: {e}")
+                logger.error(f"更新ESP32配置失败: {e}")
                 return jsonify({
                     'status': 'error',
-                    'message': f'停止失败: {str(e)}'
+                    'message': f'更新失败: {str(e)}'
                 }), 500
         
         @self.app.route('/video_feed')
         def video_feed():
             """视频流"""
-            return Response(self._generate_frames(),
+            return Response(self.receiver._generate_frames(),
                            mimetype='multipart/x-mixed-replace; boundary=frame')
         
         @self.app.route('/stats')
         def get_stats():
             """获取统计信息"""
             if self.receiver:
-                receiver_stats = self.receiver.get_stats()
-                self.stats.update(receiver_stats)
-            
-            return jsonify(self.stats)
-        
-        @self.app.route('/snapshot')
-        def snapshot():
-            """获取当前帧快照"""
-            with self.frame_lock:
-                if self.current_frame is not None:
-                    # 将OpenCV图像转换为JPEG
-                    _, buffer = cv2.imencode('.jpg', self.current_frame)
-                    frame_bytes = buffer.tobytes()
-                    
-                    # 编码为base64
-                    frame_b64 = base64.b64encode(frame_bytes).decode('utf-8')
-                    
-                    return jsonify({
-                        'status': 'success',
-                        'image': f'data:image/jpeg;base64,{frame_b64}',
-                        'timestamp': time.time()
-                    })
-                else:
-                    return jsonify({
-                        'status': 'error',
-                        'message': '没有可用的帧'
-                    }), 404
-    
-    def _web_decode_and_display(self, frame_id: int, frame_data: bytes):
-        """Web模式下的帧解码和显示"""
-        try:
-            # 解码帧
-            if self.receiver.enable_gpu:
-                frame = self.receiver._decode_rgb565_gpu(frame_data)
+                stats = self.receiver.get_stats()
+                stats['esp32_ip'] = self.current_esp32_ip
+                return jsonify(stats)
             else:
-                frame = self.receiver._decode_rgb565_cpu(frame_data)
-            
-            if frame is not None:
-                # 更新当前帧
-                with self.frame_lock:
-                    self.current_frame = frame.copy()
-                
-                # 更新统计信息
-                self.receiver._update_fps()
-                
-        except Exception as e:
-            logger.error(f"Web解码帧错误: {e}")
-    
-    def _generate_frames(self):
-        """生成视频流帧"""
-        while True:
-            with self.frame_lock:
-                if self.current_frame is not None:
-                    # 将OpenCV图像转换为JPEG
-                    _, buffer = cv2.imencode('.jpg', self.current_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                    frame_bytes = buffer.tobytes()
-                    
-                    yield (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-                else:
-                    # 发送空白帧
-                    yield (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n' + b'\r\n')
-            
-            time.sleep(0.033)  # 约30FPS
+                return jsonify({'error': '接收器未运行'})
+        
+        @self.app.route('/status')
+        def get_status():
+            """获取系统状态"""
+            return jsonify({
+                'status': 'running',
+                'esp32_ip': self.current_esp32_ip,
+                'receiver_active': self.receiver is not None and self.receiver.running
+            })
     
     def run(self):
         """运行Web应用"""
         logger.info(f"Web查看器启动在 http://{self.host}:{self.port}")
+        logger.info(f"后台接收器已启动，监听端口8888")
+        logger.info(f"当前ESP32地址: {self.current_esp32_ip}")
+        
         self.app.run(host=self.host, port=self.port, threaded=True, debug=False)
 
 def main():

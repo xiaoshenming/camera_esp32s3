@@ -3,502 +3,415 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ESP32 FPV Camera Viewer</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <title>ESP32 FPV摄像头查看器</title>
     <style>
-        body {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
         }
         
-        .main-container {
-            background: rgba(255, 255, 255, 0.95);
-            border-radius: 15px;
-            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
-            margin: 20px auto;
-            max-width: 1400px;
-            overflow: hidden;
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            color: #333;
         }
         
         .header {
-            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-            color: white;
-            padding: 20px;
-            text-align: center;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 1rem 2rem;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
         }
         
-        .video-container {
-            background: #000;
-            border-radius: 10px;
-            overflow: hidden;
-            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
-            position: relative;
-            min-height: 400px;
+        .header h1 {
+            color: #4a5568;
+            font-size: 1.8rem;
+            font-weight: 600;
+        }
+        
+        .container {
+            flex: 1;
             display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        
-        .video-placeholder {
-            color: #666;
-            font-size: 18px;
-            text-align: center;
-        }
-        
-        .video-feed {
+            padding: 2rem;
+            gap: 2rem;
+            max-width: 1400px;
+            margin: 0 auto;
             width: 100%;
-            height: auto;
-            display: block;
-        }
-        
-        .stats-card {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border-radius: 10px;
-            padding: 20px;
-            margin-bottom: 20px;
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
         }
         
         .control-panel {
-            background: #f8f9fa;
-            border-radius: 10px;
-            padding: 20px;
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 15px;
+            padding: 2rem;
+            width: 350px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+            height: fit-content;
         }
         
-        .status-indicator {
-            display: inline-block;
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            margin-right: 8px;
+        .video-container {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 15px;
+            padding: 1.5rem;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
         }
         
-        .status-connected {
-            background: #28a745;
-            animation: pulse 2s infinite;
+        .form-group {
+            margin-bottom: 1.5rem;
         }
         
-        .status-disconnected {
-            background: #dc3545;
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+            color: #4a5568;
         }
         
-        .status-connecting {
-            background: #ffc107;
-            animation: pulse 1s infinite;
+        .form-group input {
+            width: 100%;
+            padding: 0.75rem;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 1rem;
+            transition: all 0.3s ease;
         }
         
-        @keyframes pulse {
-            0% { opacity: 1; }
-            50% { opacity: 0.5; }
-            100% { opacity: 1; }
+        .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        
+        .btn {
+            width: 100%;
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-bottom: 1rem;
         }
         
         .btn-primary {
-            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-            border: none;
-            border-radius: 8px;
-            padding: 10px 20px;
-            font-weight: 500;
-            transition: all 0.3s ease;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
         }
         
         .btn-primary:hover {
             transform: translateY(-2px);
-            box-shadow: 0 4px 8px rgba(79, 172, 254, 0.3);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
         }
         
-        .btn-danger {
-            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-            border: none;
+        .btn-secondary {
+            background: #e2e8f0;
+            color: #4a5568;
+        }
+        
+        .btn-secondary:hover {
+            background: #cbd5e0;
+        }
+        
+        .status {
+            padding: 1rem;
             border-radius: 8px;
-            padding: 10px 20px;
+            margin-bottom: 1rem;
             font-weight: 500;
-            transition: all 0.3s ease;
         }
         
-        .btn-danger:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 8px rgba(245, 87, 108, 0.3);
+        .status.success {
+            background: #c6f6d5;
+            color: #22543d;
+            border: 1px solid #9ae6b4;
         }
         
-        .form-control, .form-select {
+        .status.error {
+            background: #fed7d7;
+            color: #742a2a;
+            border: 1px solid #fc8181;
+        }
+        
+        .status.info {
+            background: #bee3f8;
+            color: #2c5282;
+            border: 1px solid #90cdf4;
+        }
+        
+        .video-feed {
+            width: 100%;
+            max-width: 640px;
+            height: auto;
             border-radius: 8px;
-            border: 1px solid #ddd;
-            padding: 10px 15px;
-            transition: all 0.3s ease;
+            background: #000;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
         }
         
-        .form-control:focus, .form-select:focus {
-            border-color: #4facfe;
-            box-shadow: 0 0 0 0.2rem rgba(79, 172, 254, 0.25);
+        .stats {
+            margin-top: 1.5rem;
+            padding: 1rem;
+            background: #f7fafc;
+            border-radius: 8px;
+            border: 1px solid #e2e8f0;
+        }
+        
+        .stats h3 {
+            margin-bottom: 1rem;
+            color: #4a5568;
+            font-size: 1.1rem;
         }
         
         .stat-item {
             display: flex;
             justify-content: space-between;
-            align-items: center;
-            padding: 8px 0;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+            margin-bottom: 0.5rem;
+            padding: 0.25rem 0;
         }
         
-        .stat-item:last-child {
-            border-bottom: none;
+        .stat-label {
+            color: #718096;
+            font-weight: 500;
         }
         
         .stat-value {
-            font-weight: bold;
-            font-size: 1.1em;
+            color: #2d3748;
+            font-weight: 600;
         }
         
-        .alert {
+        .connection-info {
+            margin-top: 1rem;
+            padding: 1rem;
+            background: #edf2f7;
             border-radius: 8px;
-            border: none;
+            border-left: 4px solid #667eea;
         }
         
-        .loading-spinner {
-            display: inline-block;
-            width: 20px;
-            height: 20px;
+        .connection-info h4 {
+            margin-bottom: 0.5rem;
+            color: #4a5568;
+        }
+        
+        .connection-info p {
+            color: #718096;
+            font-size: 0.9rem;
+            margin: 0.25rem 0;
+        }
+        
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 480px;
+            color: #718096;
+            font-size: 1.1rem;
+        }
+        
+        .spinner {
             border: 3px solid #f3f3f3;
-            border-top: 3px solid #4facfe;
+            border-top: 3px solid #667eea;
             border-radius: 50%;
+            width: 40px;
+            height: 40px;
             animation: spin 1s linear infinite;
-            margin-right: 10px;
+            margin-right: 1rem;
         }
         
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
+        
+        @media (max-width: 768px) {
+            .container {
+                flex-direction: column;
+                padding: 1rem;
+            }
+            
+            .control-panel {
+                width: 100%;
+            }
+        }
     </style>
 </head>
 <body>
-    <div class="main-container">
-        <div class="header">
-            <h1><i class="fas fa-video"></i> ESP32 FPV Camera Viewer</h1>
-            <p class="mb-0">低延迟实时图传系统</p>
+    <div class="header">
+        <h1>🎥 ESP32 FPV摄像头查看器</h1>
+    </div>
+    
+    <div class="container">
+        <div class="control-panel">
+            <h2>📡 ESP32配置</h2>
+            
+            <div class="form-group">
+                <label for="esp32_ip">ESP32 IP地址:</label>
+                <input type="text" id="esp32_ip" value="192.168.1.100" placeholder="例如: 192.168.1.100">
+            </div>
+            
+            <button class="btn btn-primary" onclick="updateESP32Config()">
+                🔄 更新配置
+            </button>
+            
+            <div id="status"></div>
+            
+            <div class="connection-info">
+                <h4>📊 连接信息</h4>
+                <p><strong>接收器状态:</strong> <span id="receiver_status">运行中</span></p>
+                <p><strong>监听端口:</strong> 8888 (UDP)</p>
+                <p><strong>当前ESP32:</strong> <span id="current_esp32">192.168.1.100</span></p>
+            </div>
+            
+            <div class="stats">
+                <h3>📈 实时统计</h3>
+                <div class="stat-item">
+                    <span class="stat-label">帧率:</span>
+                    <span class="stat-value" id="fps">0 FPS</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">接收帧数:</span>
+                    <span class="stat-value" id="frames_received">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">丢弃帧数:</span>
+                    <span class="stat-value" id="frames_dropped">0</span>
+                </div>
+            </div>
         </div>
         
-        <div class="container-fluid p-4">
-            <div class="row">
-                <!-- 视频显示区域 -->
-                <div class="col-lg-8 mb-4">
-                    <div class="video-container">
-                        <div id="videoPlaceholder" class="video-placeholder">
-                            <i class="fas fa-video-slash fa-3x mb-3"></i>
-                            <p>等待连接摄像头...</p>
-                            <button class="btn btn-primary" onclick="startReceiver()">
-                                <i class="fas fa-play"></i> 开始接收
-                            </button>
-                        </div>
-                        <img id="videoFeed" class="video-feed" style="display: none;" alt="Camera Feed">
-                    </div>
-                </div>
-                
-                <!-- 控制面板 -->
-                <div class="col-lg-4">
-                    <!-- 连接状态 -->
-                    <div class="stats-card">
-                        <h5><i class="fas fa-wifi"></i> 连接状态</h5>
-                        <div class="stat-item">
-                            <span>状态:</span>
-                            <span>
-                                <span id="statusIndicator" class="status-indicator status-disconnected"></span>
-                                <span id="statusText">未连接</span>
-                            </span>
-                        </div>
-                        <div class="stat-item">
-                            <span>ESP32地址:</span>
-                            <span class="stat-value" id="esp32Address">192.168.1.100</span>
-                        </div>
-                        <div class="stat-item">
-                            <span>接收地址:</span>
-                            <span class="stat-value" id="bindAddress">0.0.0.0:8888</span>
-                        </div>
-                        <div class="stat-item">
-                            <span>GPU加速:</span>
-                            <span class="stat-value" id="gpuStatus">检测中...</span>
-                        </div>
-                    </div>
-                    
-                    <!-- 性能统计 -->
-                    <div class="stats-card">
-                        <h5><i class="fas fa-chart-line"></i> 性能统计</h5>
-                        <div class="stat-item">
-                            <span>FPS:</span>
-                            <span class="stat-value" id="fps">0</span>
-                        </div>
-                        <div class="stat-item">
-                            <span>完整帧:</span>
-                            <span class="stat-value" id="framesComplete">0</span>
-                        </div>
-                        <div class="stat-item">
-                            <span>丢弃帧:</span>
-                            <span class="stat-value" id="framesDropped">0</span>
-                        </div>
-                        <div class="stat-item">
-                            <span>接收包:</span>
-                            <span class="stat-value" id="packetsReceived">0</span>
-                        </div>
-                    </div>
-                    
-                    <!-- 控制面板 -->
-                    <div class="control-panel">
-                        <h5><i class="fas fa-cog"></i> 控制面板</h5>
-                        
-                        <div id="connectionSettings">
-                            <div class="mb-3">
-                                <label for="esp32Ip" class="form-label">ESP32 IP地址</label>
-                                <input type="text" class="form-control" id="esp32Ip" value="192.168.1.100" placeholder="192.168.1.100">
-                                <div class="form-text">输入ESP32摄像头的IP地址</div>
-                            </div>
-                            <div class="mb-3">
-                                <label for="bindIp" class="form-label">绑定IP地址</label>
-                                <input type="text" class="form-control" id="bindIp" value="0.0.0.0" placeholder="0.0.0.0">
-                            </div>
-                            <div class="mb-3">
-                                <label for="bindPort" class="form-label">监听端口</label>
-                                <input type="number" class="form-control" id="bindPort" value="8888" placeholder="8888">
-                            </div>
-                            <div class="mb-3">
-                                <div class="form-check">
-                                    <input class="form-check-input" type="checkbox" id="enableGpu" checked>
-                                    <label class="form-check-label" for="enableGpu">
-                                        启用GPU加速
-                                    </label>
-                                </div>
-                            </div>
-                            <div class="d-grid gap-2">
-                                <button class="btn btn-primary" onclick="startReceiver()">
-                                    <i class="fas fa-play"></i> 开始接收
-                                </button>
-                                <button class="btn btn-danger" onclick="stopReceiver()" disabled id="stopBtn">
-                                    <i class="fas fa-stop"></i> 停止接收
-                                </button>
-                            </div>
-                        </div>
-                        
-                        <div id="snapshotSection" style="display: none;">
-                            <hr>
-                            <button class="btn btn-success w-100" onclick="takeSnapshot()">
-                                <i class="fas fa-camera"></i> 拍照
-                            </button>
-                        </div>
-                    </div>
+        <div class="video-container">
+            <h2>📺 实时视频流</h2>
+            <div id="video-wrapper">
+                <div class="loading">
+                    <div class="spinner"></div>
+                    正在加载视频流...
                 </div>
             </div>
         </div>
     </div>
-
-    <!-- 消息提示 -->
-    <div class="position-fixed top-0 end-0 p-3" style="z-index: 11">
-        <div id="alertContainer"></div>
-    </div>
-
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    
     <script>
-        let isReceiving = false;
-        let statsInterval = null;
+        let statsInterval;
         
         // 页面加载完成后初始化
         document.addEventListener('DOMContentLoaded', function() {
-            checkGpuSupport();
-            updateStats();
+            loadVideoFeed();
+            startStatsUpdate();
+            updateSystemStatus();
         });
         
-        // 检查GPU支持
-        async function checkGpuSupport() {
-            try {
-                const response = await fetch('/stats');
-                const stats = await response.json();
-                document.getElementById('gpuStatus').textContent = '检测中...';
-            } catch (error) {
-                document.getElementById('gpuStatus').textContent = '未知';
-            }
+        // 加载视频流
+        function loadVideoFeed() {
+            const videoWrapper = document.getElementById('video-wrapper');
+            videoWrapper.innerHTML = `
+                <img src="/video_feed" alt="ESP32视频流" class="video-feed" 
+                     onerror="handleVideoError()" onload="handleVideoLoad()">
+            `;
         }
         
-        // 开始接收
-        async function startReceiver() {
-            const esp32Ip = document.getElementById('esp32Ip').value;
-            const bindIp = document.getElementById('bindIp').value;
-            const bindPort = parseInt(document.getElementById('bindPort').value);
-            const enableGpu = document.getElementById('enableGpu').checked;
+        // 处理视频加载成功
+        function handleVideoLoad() {
+            showStatus('视频流加载成功！', 'success');
+        }
+        
+        // 处理视频加载错误
+        function handleVideoError() {
+            showStatus('视频流加载失败，请检查ESP32连接', 'error');
+        }
+        
+        // 更新ESP32配置
+        async function updateESP32Config() {
+            const esp32Ip = document.getElementById('esp32_ip').value.trim();
             
-            updateStatus('connecting', '连接中...');
+            if (!esp32Ip) {
+                showStatus('请输入有效的ESP32 IP地址', 'error');
+                return;
+            }
             
             try {
-                const response = await fetch('/start_receiver', {
+                const response = await fetch('/update_esp32_config', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({
-                        esp32_ip: esp32Ip,
-                        bind_ip: bindIp,
-                        port: bindPort,
-                        enable_gpu: enableGpu
+                        esp32_ip: esp32Ip
                     })
                 });
                 
                 const result = await response.json();
                 
                 if (result.status === 'success') {
-                    isReceiving = true;
-                    updateStatus('connected', '已连接');
-                    showAlert('success', result.message);
-                    
-                    // 更新UI
-                    document.getElementById('videoPlaceholder').style.display = 'none';
-                    document.getElementById('videoFeed').style.display = 'block';
-                    document.getElementById('videoFeed').src = '/video_feed';
-                    document.getElementById('stopBtn').disabled = false;
-                    document.getElementById('snapshotSection').style.display = 'block';
-                    
-                    // 使用实际端口（如果端口被占用，可能会使用不同的端口）
-                    const actualPort = result.actual_port || bindPort;
-                    document.getElementById('esp32Address').textContent = esp32Ip;
-                    document.getElementById('bindAddress').textContent = `${bindIp}:${actualPort}`;
-                    document.getElementById('bindPort').value = actualPort;
-                    
-                    // 开始统计更新
-                    startStatsUpdate();
-                    
+                    showStatus(result.message, 'success');
+                    document.getElementById('current_esp32').textContent = esp32Ip;
+                    // 重新加载视频流
+                    loadVideoFeed();
                 } else {
-                    updateStatus('disconnected', '连接失败');
-                    showAlert('danger', result.message);
+                    showStatus(result.message, 'error');
                 }
-                
             } catch (error) {
-                updateStatus('disconnected', '连接失败');
-                showAlert('danger', '连接失败: ' + error.message);
+                showStatus('更新配置失败: ' + error.message, 'error');
             }
         }
         
-        // 停止接收
-        async function stopReceiver() {
-            try {
-                const response = await fetch('/stop_receiver', {
-                    method: 'POST'
-                });
-                
-                const result = await response.json();
-                
-                if (result.status === 'success') {
-                    isReceiving = false;
-                    updateStatus('disconnected', '未连接');
-                    showAlert('info', result.message);
-                    
-                    // 更新UI
-                    document.getElementById('videoPlaceholder').style.display = 'flex';
-                    document.getElementById('videoFeed').style.display = 'none';
-                    document.getElementById('videoFeed').src = '';
-                    document.getElementById('stopBtn').disabled = true;
-                    document.getElementById('snapshotSection').style.display = 'none';
-                    
-                    // 停止统计更新
-                    stopStatsUpdate();
-                    resetStats();
-                }
-                
-            } catch (error) {
-                showAlert('danger', '停止失败: ' + error.message);
-            }
-        }
-        
-        // 拍照
-        async function takeSnapshot() {
-            try {
-                const response = await fetch('/snapshot');
-                const result = await response.json();
-                
-                if (result.status === 'success') {
-                    // 创建下载链接
-                    const link = document.createElement('a');
-                    link.href = result.image;
-                    link.download = `fpv_snapshot_${Date.now()}.jpg`;
-                    link.click();
-                    
-                    showAlert('success', '拍照成功！');
-                } else {
-                    showAlert('warning', result.message);
-                }
-                
-            } catch (error) {
-                showAlert('danger', '拍照失败: ' + error.message);
-            }
-        }
-        
-        // 更新状态
-        function updateStatus(status, text) {
-            const indicator = document.getElementById('statusIndicator');
-            const statusText = document.getElementById('statusText');
+        // 显示状态信息
+        function showStatus(message, type) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.className = `status ${type}`;
+            statusDiv.textContent = message;
             
-            indicator.className = 'status-indicator status-' + status;
-            statusText.textContent = text;
-        }
-        
-        // 显示提示消息
-        function showAlert(type, message) {
-            const alertHtml = `
-                <div class="alert alert-${type} alert-dismissible fade show" role="alert">
-                    ${message}
-                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                </div>
-            `;
-            
-            const container = document.getElementById('alertContainer');
-            container.innerHTML = alertHtml;
-            
-            // 自动消失
+            // 3秒后自动清除状态信息
             setTimeout(() => {
-                const alert = container.querySelector('.alert');
-                if (alert) {
-                    const bsAlert = new bootstrap.Alert(alert);
-                    bsAlert.close();
-                }
-            }, 5000);
+                statusDiv.textContent = '';
+                statusDiv.className = '';
+            }, 3000);
         }
         
-        // 开始统计更新
+        // 开始统计信息更新
         function startStatsUpdate() {
-            statsInterval = setInterval(updateStats, 1000);
+            statsInterval = setInterval(async () => {
+                try {
+                    const response = await fetch('/stats');
+                    const stats = await response.json();
+                    
+                    if (stats.fps !== undefined) {
+                        document.getElementById('fps').textContent = stats.fps.toFixed(1) + ' FPS';
+                        document.getElementById('frames_received').textContent = stats.frames_received || 0;
+                        document.getElementById('frames_dropped').textContent = stats.frames_dropped || 0;
+                    }
+                } catch (error) {
+                    console.error('获取统计信息失败:', error);
+                }
+            }, 1000);
         }
         
-        // 停止统计更新
-        function stopStatsUpdate() {
+        // 更新系统状态
+        async function updateSystemStatus() {
+            try {
+                const response = await fetch('/status');
+                const status = await response.json();
+                
+                document.getElementById('receiver_status').textContent = 
+                    status.receiver_active ? '运行中' : '已停止';
+                document.getElementById('current_esp32').textContent = status.esp32_ip;
+            } catch (error) {
+                console.error('获取系统状态失败:', error);
+            }
+        }
+        
+        // 页面卸载时清理
+        window.addEventListener('beforeunload', function() {
             if (statsInterval) {
                 clearInterval(statsInterval);
-                statsInterval = null;
             }
-        }
-        
-        // 更新统计信息
-        async function updateStats() {
-            try {
-                const response = await fetch('/stats');
-                const stats = await response.json();
-                
-                document.getElementById('fps').textContent = stats.fps.toFixed(1);
-                document.getElementById('framesComplete').textContent = stats.frames_complete;
-                document.getElementById('framesDropped').textContent = stats.frames_dropped;
-                document.getElementById('packetsReceived').textContent = stats.packets_received;
-                
-            } catch (error) {
-                // 静默处理错误，避免频繁提示
-            }
-        }
-        
-        // 重置统计信息
-        function resetStats() {
-            document.getElementById('fps').textContent = '0';
-            document.getElementById('framesComplete').textContent = '0';
-            document.getElementById('framesDropped').textContent = '0';
-            document.getElementById('packetsReceived').textContent = '0';
-        }
+        });
     </script>
 </body>
 </html>

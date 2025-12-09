@@ -235,32 +235,20 @@ class FPVReceiver:
                 logger.error(f"帧数据大小错误: {len(frame_data)}, 期望: {MAX_FRAME_SIZE}")
                 return None
             
-            # 将字节数据转换为uint16数组，注意字节序
-            rgb565 = np.frombuffer(frame_data, dtype=np.uint16)
+            # 直接使用大端序解码（根据日志分析，大端序是正确的）
+            rgb565_be = np.frombuffer(frame_data, dtype=np.uint16).byteswap()  # 转换为大端序
             
-            # 调试：打印前几个像素的原始值
-            if self.stats['frames_received'] % 100 == 1:  # 每100帧打印一次
-                logger.info(f"RGB565原始数据前4个值: {rgb565[:4]}")
-            
-            # 转换为RGB888 - 修复字节序问题
-            r = ((rgb565 >> 11) & 0x1F) << 3
-            g = ((rgb565 >> 5) & 0x3F) << 2
-            b = (rgb565 & 0x1F) << 3
+            # 大端序RGB565解码
+            r = ((rgb565_be >> 11) & 0x1F) << 3
+            g = ((rgb565_be >> 5) & 0x3F) << 2
+            b = (rgb565_be & 0x1F) << 3
             
             # 确保值在有效范围内
-            r = np.clip(r, 0, 255)
-            g = np.clip(g, 0, 255)
-            b = np.clip(b, 0, 255)
+            r, g, b = np.clip(r, 0, 255), np.clip(g, 0, 255), np.clip(b, 0, 255)
             
             # 合并为RGB图像
             rgb = np.stack([r, g, b], axis=-1)
             rgb = rgb.reshape(FRAME_HEIGHT, FRAME_WIDTH, 3)
-            
-            # 调试：检查图像数据
-            if self.stats['frames_received'] % 100 == 1:  # 每100帧打印一次
-                logger.info(f"解码后图像统计 - R:[{rgb[:,:,0].min()}-{rgb[:,:,0].max()}] "
-                           f"G:[{rgb[:,:,1].min()}-{rgb[:,:,1].max()}] "
-                           f"B:[{rgb[:,:,2].min()}-{rgb[:,:,2].max()}]")
             
             return rgb.astype(np.uint8)
             
@@ -328,36 +316,30 @@ class FPVReceiver:
     
     def _generate_frames(self):
         """生成MJPEG帧"""
-        print("🎥 开始生成MJPEG视频流...")
+        frame_count = 0
         while True:
             if self.current_frame is not None:
                 try:
-                    # 调试：检查当前帧状态
-                    print(f"📸 当前帧状态: 尺寸={self.current_frame.shape}, "
-                          f"数据类型={self.current_frame.dtype}, "
-                          f"值范围=[{self.current_frame.min()}-{self.current_frame.max()}]")
-                    
                     # 将OpenCV图像转换为JPEG
                     ret, buffer = cv2.imencode('.jpg', self.current_frame, 
                                             [cv2.IMWRITE_JPEG_QUALITY, 85])
                     if ret:
                         frame = buffer.tobytes()
-                        print(f"📦 JPEG编码成功: {len(frame)} 字节")
                         
                         # 生成MJPEG流
                         mjpeg_frame = (b'--frame\r\n'
                                      b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-                        print(f"🎬 MJPEG帧生成: {len(mjpeg_frame)} 字节")
                         yield mjpeg_frame
+                        
+                        # 每100帧打印一次状态
+                        frame_count += 1
+                        if frame_count % 100 == 0:
+                            print(f"🎥 已生成 {frame_count} 帧视频流")
                     else:
                         print("❌ JPEG编码失败")
                         
                 except Exception as e:
                     print(f"❌ 视频帧生成错误: {e}")
-                    import traceback
-                    traceback.print_exc()
-            else:
-                print("⏳ 等待帧数据...")
             
             time.sleep(0.033)  # ~30 FPS
     
