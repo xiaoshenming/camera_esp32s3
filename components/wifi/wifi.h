@@ -15,18 +15,18 @@ typedef struct {
     char password[64];
 } wifi_credentials_t;
 
-// UDP数据包头部结构体
+// 简化的UDP数据包结构 - 直接发送完整帧
 typedef struct __attribute__((packed)) {
     uint16_t magic;         // 魔数 0xFPFV
-    uint16_t frame_id;      // 帧ID
-    uint16_t packet_id;     // 包ID
-    uint16_t total_packets; // 总包数
-} udp_packet_header_t;
+    uint16_t width;         // 图像宽度
+    uint16_t height;        // 图像高度
+    uint8_t  data[1];       // 图像数据起始位置
+} udp_frame_t;
 
 #define UDP_MAGIC_NUMBER 0x5056
 #define UDP_PORT 8888
-#define MAX_UDP_PAYLOAD_SIZE 1024
-#define PACKETS_PER_FRAME ((320 * 240 * 2 + MAX_UDP_PAYLOAD_SIZE - 1) / MAX_UDP_PAYLOAD_SIZE)
+#define MAX_FRAME_SIZE (160 * 120 * 2)  // QQVGA RGB565 = 38400字节
+#define UDP_PACKET_SIZE (sizeof(udp_frame_t) + MAX_FRAME_SIZE - 1)  // 完整包大小
 
 /**
  * @brief 初始化WiFi STA模式

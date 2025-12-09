@@ -31,7 +31,26 @@ void app_main(void)
         return;
     }
     
-    // 初始化摄像头组件（摄像头会使用已初始化的I2C总线）
+    // 配置摄像头功能模块（在初始化之前设置配置）
+    // FPV模式配置（使用立创例程的稳定配置）
+    camera_user_config_t fpv_config = {
+        .enable_lcd_display = false,     // 关闭LCD显示节省CPU
+        .enable_fps_monitor = true,      // 保留帧率监控
+        .enable_capture_task = true,     // 启用捕获任务为FPV提供数据
+        .xclk_freq_hz = 24000000,       // 24MHz时钟（立创例程验证稳定）
+        .frame_size = FRAMESIZE_QQVGA    // 160x120分辨率（实际工作分辨率）
+    };
+    
+    // 选择FPV模式配置
+    camera_user_config_t selected_config = fpv_config;
+    
+    // 设置摄像头配置（在初始化之前）
+    if (!camera_set_config(&selected_config)) {
+        ESP_LOGE("main", "Failed to set camera config");
+        return;
+    }
+    
+    // 初始化摄像头组件（摄像头会使用已初始化的I2C总线和配置）
     if (!camera_init()) {
         ESP_LOGE("main", "Camera initialization failed");
         return;
@@ -57,25 +76,6 @@ void app_main(void)
         return;
     }
     ESP_LOGI("main", "WiFi connected successfully!");
-    
-    // 配置摄像头功能模块
-    // FPV模式配置（用于低延迟图传）
-    camera_user_config_t fpv_config = {
-        .enable_lcd_display = false,     // 关闭LCD显示节省CPU
-        .enable_fps_monitor = true,      // 保留帧率监控
-        .enable_capture_task = false,    // 关闭普通捕获任务
-        .xclk_freq_hz = 50000000,       // 50MHz时钟提升性能
-        .frame_size = FRAMESIZE_QVGA      // 320x240分辨率
-    };
-    
-    // 选择FPV模式配置
-    camera_user_config_t selected_config = fpv_config;
-    
-    // 设置摄像头配置
-    if (!camera_set_config(&selected_config)) {
-        ESP_LOGE("main", "Failed to set camera config");
-        return;
-    }
     
     // 启动摄像头功能（根据配置自动启动相应模块）
     if (!camera_start()) {

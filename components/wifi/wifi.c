@@ -74,10 +74,13 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                     ESP_LOGI(TAG, "Got IP address: " IPSTR, IP2STR(&event->ip_info.ip));
                     wifi_connected = true;
                     
-                    // 设置广播地址
+                    // 设置目标地址 - 直接发送到192.168.1.113（接收端）
                     broadcast_addr.sin_family = AF_INET;
                     broadcast_addr.sin_port = htons(UDP_PORT);
-                    broadcast_addr.sin_addr.s_addr = inet_addr("255.255.255.255");
+                    // 直接使用接收端IP地址：192.168.1.113
+                    broadcast_addr.sin_addr.s_addr = inet_addr("192.168.1.113");
+                    
+                    ESP_LOGI(TAG, "Target address: 192.168.1.113:%d", UDP_PORT);
                 }
                 break;
             default:
@@ -187,11 +190,8 @@ bool wifi_udp_broadcast_init(uint16_t port)
         return false;
     }
     
-    // 设置发送缓冲区大小
-    int buffer_size = 64 * 1024; // 64KB
-    if (setsockopt(udp_socket, SOL_SOCKET, SO_SNDBUF, &buffer_size, sizeof(buffer_size)) < 0) {
-        ESP_LOGW(TAG, "Failed to set send buffer size: %s", strerror(errno));
-    }
+    // ESP32 WiFi协议栈不支持设置SO_SNDBUF，跳过此设置
+    ESP_LOGI(TAG, "Using default UDP send buffer size");
     
     // 设置超时
     struct timeval timeout;
@@ -208,10 +208,12 @@ bool wifi_udp_broadcast_init(uint16_t port)
 int wifi_udp_send(const void* data, size_t len)
 {
     if (udp_socket < 0 || !wifi_connected) {
+        ESP_LOGE(TAG, "UDP send failed: socket=%d, connected=%d", udp_socket, wifi_connected);
         return -1;
     }
     
     if (xSemaphoreTake(wifi_mutex, pdMS_TO_TICKS(10)) != pdTRUE) {
+        ESP_LOGE(TAG, "UDP send failed: mutex timeout");
         return -1;
     }
     
@@ -221,7 +223,16 @@ int wifi_udp_send(const void* data, size_t len)
     xSemaphoreGive(wifi_mutex);
     
     if (sent < 0) {
-        ESP_LOGW(TAG, "UDP send failed: %s", strerror(errno));
+        ESP_LOGE(TAG, "UDP send failed: %s (errno=%d)", strerror(errno), errno);
+        ESP_LOGE(TAG, "Socket state: fd=%d, connected=%d", udp_socket, wifi_connected);
+        ESP_LOGE(TAG, "Target: %d.%d.%d.%d:%d", 
+                 (broadcast_addr.sin_addr.s_addr >> 0) & 0xFF,
+                 (broadcast_addr.sin_addr.s_addr >> 8) & 0xFF,
+                 (broadcast_addr.sin_addr.s_addr >> 16) & 0xFF,
+                 (broadcast_addr.sin_addr.s_addr >> 24) & 0xFF,
+                 ntohs(broadcast_addr.sin_port));
+    } else {
+        ESP_LOGD(TAG, "UDP send success: %d bytes", sent);
     }
     
     return sent;
@@ -254,52 +265,35 @@ bool wifi_send_camera_frame(const uint8_t* frame_data, size_t frame_size, uint16
         return false;
     }
     
-    current_frame_id = frame_id;
-    uint16_t total_packets = (frame_size + MAX_UDP_PAYLOAD_SIZE - sizeof(udp_packet_header_t) - 1) / 
-                            (MAX_UDP_PAYLOAD_SIZE - sizeof(udp_packet_header_t));
+    // 检查帧大小是否超过限制
+    if (frame_size > MAX_FRAME_SIZE) {
+        ESP_LOGW(TAG, "Frame too large: %d bytes (max: %d)", frame_size, MAX_FRAME_SIZE);
+        return false;
+    }
     
-    const uint8_t* data_ptr = frame_data;
-    size_t remaining_bytes = frame_size;
+    // 准备完整的UDP数据包
+    static uint8_t packet_buffer[UDP_PACKET_SIZE];
     
-    for (uint16_t packet_id = 0; packet_id < total_packets; packet_id++) {
-        // 准备数据包
-        uint8_t packet_buffer[MAX_UDP_PAYLOAD_SIZE];
-        udp_packet_header_t* header = (udp_packet_header_t*)packet_buffer;
-        
-        // 填充头部
-        header->magic = UDP_MAGIC_NUMBER;
-        header->frame_id = frame_id;
-        header->packet_id = packet_id;
-        header->total_packets = total_packets;
-        
-        // 计算载荷大小
-        size_t header_size = sizeof(udp_packet_header_t);
-        size_t payload_size = remaining_bytes > (MAX_UDP_PAYLOAD_SIZE - header_size) ? 
-                              (MAX_UDP_PAYLOAD_SIZE - header_size) : remaining_bytes;
-        
-        // 复制数据
-        memcpy(packet_buffer + header_size, data_ptr, payload_size);
-        
-        // 发送数据包
-        int sent = wifi_udp_send(packet_buffer, header_size + payload_size);
-        if (sent < 0) {
-            ESP_LOGW(TAG, "Failed to send packet %d/%d for frame %d", 
-                     packet_id + 1, total_packets, frame_id);
-            return false;
-        }
-        
-        // 更新指针
-        data_ptr += payload_size;
-        remaining_bytes -= payload_size;
-        
-        // 小延迟避免网络拥塞
-        if (packet_id < total_packets - 1) {
-            vTaskDelay(pdMS_TO_TICKS(1));
-        }
+    // 使用结构体构建包头以确保正确的字节序和对齐
+    udp_frame_t* frame = (udp_frame_t*)packet_buffer;
+    frame->magic = UDP_MAGIC_NUMBER;  // 0x5056
+    frame->width = 160;               // QQVGA宽度
+    frame->height = 120;              // QQVGA高度
+    
+    // 复制图像数据
+    memcpy(frame->data, frame_data, frame_size);
+    
+    // 发送完整帧
+    size_t total_size = sizeof(udp_frame_t) - 1 + frame_size;  // 头部(6字节) + 图像数据
+    int sent = wifi_udp_send(packet_buffer, total_size);
+    
+    if (sent < 0) {
+        ESP_LOGW(TAG, "Failed to send frame %d", frame_id);
+        return false;
     }
     
     // 更新统计信息
-    wifi_update_stats(total_packets, frame_size);
+    wifi_update_stats(1, frame_size);
     
     return true;
 }

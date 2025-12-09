@@ -212,6 +212,10 @@
                             </span>
                         </div>
                         <div class="stat-item">
+                            <span>ESP32地址:</span>
+                            <span class="stat-value" id="esp32Address">192.168.1.100</span>
+                        </div>
+                        <div class="stat-item">
                             <span>接收地址:</span>
                             <span class="stat-value" id="bindAddress">0.0.0.0:8888</span>
                         </div>
@@ -247,6 +251,11 @@
                         <h5><i class="fas fa-cog"></i> 控制面板</h5>
                         
                         <div id="connectionSettings">
+                            <div class="mb-3">
+                                <label for="esp32Ip" class="form-label">ESP32 IP地址</label>
+                                <input type="text" class="form-control" id="esp32Ip" value="192.168.1.100" placeholder="192.168.1.100">
+                                <div class="form-text">输入ESP32摄像头的IP地址</div>
+                            </div>
                             <div class="mb-3">
                                 <label for="bindIp" class="form-label">绑定IP地址</label>
                                 <input type="text" class="form-control" id="bindIp" value="0.0.0.0" placeholder="0.0.0.0">
@@ -314,6 +323,7 @@
         
         // 开始接收
         async function startReceiver() {
+            const esp32Ip = document.getElementById('esp32Ip').value;
             const bindIp = document.getElementById('bindIp').value;
             const bindPort = parseInt(document.getElementById('bindPort').value);
             const enableGpu = document.getElementById('enableGpu').checked;
@@ -327,6 +337,7 @@
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({
+                        esp32_ip: esp32Ip,
                         bind_ip: bindIp,
                         port: bindPort,
                         enable_gpu: enableGpu
@@ -349,6 +360,7 @@
                     
                     // 使用实际端口（如果端口被占用，可能会使用不同的端口）
                     const actualPort = result.actual_port || bindPort;
+                    document.getElementById('esp32Address').textContent = esp32Ip;
                     document.getElementById('bindAddress').textContent = `${bindIp}:${actualPort}`;
                     document.getElementById('bindPort').value = actualPort;
                     

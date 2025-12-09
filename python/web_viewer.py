@@ -55,6 +55,7 @@ class WebViewer:
             try:
                 data = request.get_json()
                 bind_ip = data.get('bind_ip', '0.0.0.0')
+                esp32_ip = data.get('esp32_ip', '192.168.1.100')  # 新增ESP32 IP配置
                 port = int(data.get('port', 8888))
                 enable_gpu = data.get('enable_gpu', True)
                 
@@ -69,16 +70,17 @@ class WebViewer:
                 
                 for try_port in ports_to_try:
                     try:
-                        # 创建新接收器
+                        # 创建新接收器 - 强制禁用GPU以确保稳定性
                         self.receiver = FPVReceiver(
                             bind_ip=bind_ip,
                             port=try_port,
-                            enable_gpu=enable_gpu,
-                            display_window=False  # Web模式下不显示窗口
+                            enable_gpu=False,  # 强制禁用GPU
+                            display_window=False,  # Web模式下不显示窗口
+                            esp32_ip=esp32_ip  # 传递ESP32 IP地址
                         )
                         
                         # 修改接收器以支持Web显示
-                        self.receiver._decode_and_display = self._web_decode_and_display
+                        self.receiver._web_decode_and_display = self._web_decode_and_display
                         
                         # 启动接收器
                         self.receiver.start()

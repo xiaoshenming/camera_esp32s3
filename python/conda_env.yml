@@ -11,7 +11,7 @@ dependencies:
   - pip:
     - --extra-index-url https://pypi.org/simple/
     - flask
-    - cupy-cuda11x  # CUDA支持，根据CUDA版本选择
+    - cupy-cuda13x  # CUDA支持，根据CUDA版本选择
     - websockets
     - asyncio
     - dataclasses
