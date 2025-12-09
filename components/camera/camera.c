@@ -5,6 +5,7 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "lcd.h"
+#include "wifi.h"
 
 static const char *TAG = "camera";
 
@@ -34,9 +35,11 @@ static QueueHandle_t xQueueLCDFrame = NULL;
 static TaskHandle_t camera_task_handle = NULL;
 static TaskHandle_t lcd_task_handle = NULL;
 static TaskHandle_t fps_monitor_task_handle = NULL;
+static TaskHandle_t fpv_task_handle = NULL;
 static bool camera_running = false;
 static bool lcd_display_running = false;
 static bool fps_monitor_running = false;
+static bool fpv_running = false;
 
 // 帧率统计变量
 static uint32_t camera_frame_count = 0;
@@ -549,5 +552,133 @@ bool camera_stop_lcd_display(void)
     }
     
     ESP_LOGI(TAG, "Camera LCD display stopped successfully");
+    return true;
+}
+
+// FPV传输任务
+static void camera_fpv_task(void *arg)
+{
+    ESP_LOGI(TAG, "FPV transmission task started");
+    
+    uint16_t frame_id = 0;
+    uint32_t last_fps_time = xTaskGetTickCount();
+    uint32_t frame_count = 0;
+    
+    while (fpv_running) {
+        camera_fb_t *frame = esp_camera_fb_get();
+        if (frame) {
+            // 发送帧数据
+            if (wifi_send_camera_frame(frame->buf, frame->len, frame_id)) {
+                frame_count++;
+                frame_id++;
+                
+                // 每5秒输出一次统计信息
+                uint32_t current_time = xTaskGetTickCount();
+                float elapsed_time = (current_time - last_fps_time) / 1000.0f;
+                if (elapsed_time >= 5.0f) {
+                    float fps = frame_count / elapsed_time;
+                    ESP_LOGI(TAG, "FPV Transmission: %.1f FPS, Frame size: %d bytes", fps, frame->len);
+                    frame_count = 0;
+                    last_fps_time = current_time;
+                }
+            } else {
+                ESP_LOGW(TAG, "Failed to send frame %d", frame_id);
+            }
+            
+            esp_camera_fb_return(frame);
+        } else {
+            ESP_LOGW(TAG, "Failed to get camera frame for FPV");
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+    }
+    
+    ESP_LOGI(TAG, "FPV transmission task stopped");
+    vTaskDelete(NULL);
+}
+
+// 启动FPV模式（WiFi UDP传输）
+bool camera_start_fpv_mode(void)
+{
+    if (fpv_running) {
+        ESP_LOGW(TAG, "FPV mode already running");
+        return true;
+    }
+    
+    ESP_LOGI(TAG, "Starting FPV mode...");
+    
+    // 初始化WiFi
+    if (!wifi_init_sta(WIFI_SSID, WIFI_PASSWORD)) {
+        ESP_LOGE(TAG, "Failed to initialize WiFi");
+        return false;
+    }
+    
+    // 等待WiFi连接
+    int retry_count = 0;
+    while (!wifi_is_connected() && retry_count < 20) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+        retry_count++;
+        ESP_LOGI(TAG, "Waiting for WiFi connection... %d/20", retry_count);
+    }
+    
+    if (!wifi_is_connected()) {
+        ESP_LOGE(TAG, "WiFi connection failed");
+        return false;
+    }
+    
+    // 初始化UDP广播
+    if (!wifi_udp_broadcast_init(UDP_PORT)) {
+        ESP_LOGE(TAG, "Failed to initialize UDP broadcast");
+        return false;
+    }
+    
+    // 获取并显示IP地址
+    char* local_ip = wifi_get_local_ip();
+    if (local_ip) {
+        ESP_LOGI(TAG, "FPV server started on IP: %s, Port: %d", local_ip, UDP_PORT);
+        free(local_ip);
+    }
+    
+    fpv_running = true;
+    
+    // 创建FPV传输任务
+    BaseType_t ret = xTaskCreatePinnedToCore(
+        camera_fpv_task, 
+        "camera_fpv", 
+        8 * 1024,  // 增大栈空间以处理网络操作
+        NULL, 
+        6,  // 高优先级确保实时性
+        &fpv_task_handle, 
+        1   // 使用核心1避免与LCD显示冲突
+    );
+    
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create FPV task");
+        fpv_running = false;
+        return false;
+    }
+    
+    ESP_LOGI(TAG, "FPV mode started successfully");
+    return true;
+}
+
+// 停止FPV模式
+bool camera_stop_fpv_mode(void)
+{
+    if (!fpv_running) {
+        ESP_LOGW(TAG, "FPV mode not running");
+        return true;
+    }
+    
+    ESP_LOGI(TAG, "Stopping FPV mode...");
+    
+    fpv_running = false;
+    
+    // 等待任务结束
+    if (fpv_task_handle) {
+        vTaskDelete(fpv_task_handle);
+        fpv_task_handle = NULL;
+    }
+    
+    ESP_LOGI(TAG, "FPV mode stopped successfully");
     return true;
 }

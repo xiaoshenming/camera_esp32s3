@@ -95,6 +95,24 @@ bool camera_capture(void);
  */
 uint8_t* camera_get_image_data(void);
 
+/**
+ * @brief 启动FPV模式（WiFi UDP传输）
+ * @return true 成功，false 失败
+ */
+bool camera_start_fpv_mode(void);
+
+/**
+ * @brief 停止FPV模式
+ * @return true 成功，false 失败
+ */
+bool camera_stop_fpv_mode(void);
+
+/**
+ * @brief FPV传输任务
+ * @param arg 任务参数
+ */
+static void camera_fpv_task(void *arg);
+
 #ifdef __cplusplus
 }
 #endif

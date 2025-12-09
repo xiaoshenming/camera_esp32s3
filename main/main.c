@@ -2,6 +2,7 @@
 #include "camera.h"
 #include "uart.h"
 #include "lcd.h"
+#include "wifi.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -36,42 +37,32 @@ void app_main(void)
         return;
     }
     
-    // 初始化LCD显示屏
-    if (!lcd_init()) {
-        ESP_LOGE("main", "LCD initialization failed");
+    // 初始化WiFi组件（用于FPV图传）
+    if (!wifi_init()) {
+        ESP_LOGE("main", "WiFi initialization failed");
         return;
     }
     
+    // 等待WiFi连接
+    ESP_LOGI("main", "Waiting for WiFi connection...");
+    if (!wifi_wait_connected()) {
+        ESP_LOGE("main", "WiFi connection failed");
+        return;
+    }
+    ESP_LOGI("main", "WiFi connected successfully!");
+    
     // 配置摄像头功能模块
-    // 示例1: 全功能模式（用于调试和开发）
-    camera_user_config_t full_config = {
-        .enable_lcd_display = true,      // 启用LCD显示
-        .enable_fps_monitor = true,      // 启用帧率监控
-        .enable_capture_task = true,      // 启用捕获任务
-        .xclk_freq_hz = 40000000,       // 40MHz时钟
+    // FPV模式配置（用于低延迟图传）
+    camera_user_config_t fpv_config = {
+        .enable_lcd_display = false,     // 关闭LCD显示节省CPU
+        .enable_fps_monitor = true,      // 保留帧率监控
+        .enable_capture_task = false,    // 关闭普通捕获任务
+        .xclk_freq_hz = 50000000,       // 50MHz时钟提升性能
         .frame_size = FRAMESIZE_QVGA      // 320x240分辨率
     };
     
-    // 示例2: 推流模式（用于实时图传，关闭LCD显示以提高性能）
-    // camera_user_config_t streaming_config = {
-    //     .enable_lcd_display = false,     // 关闭LCD显示节省CPU
-    //     .enable_fps_monitor = true,      // 保留帧率监控
-    //     .enable_capture_task = true,      // 启用捕获任务
-    //     .xclk_freq_hz = 50000000,       // 50MHz时钟提升性能
-    //     .frame_size = FRAMESIZE_QVGA      // 320x240分辨率
-    // };
-    
-    // 示例3: 纯捕获模式（最高性能，只捕获不显示）
-    // camera_user_config_t capture_only_config = {
-    //     .enable_lcd_display = false,     // 关闭LCD显示
-    //     .enable_fps_monitor = false,     // 关闭帧率监控
-    //     .enable_capture_task = true,      // 启用捕获任务
-    //     .xclk_freq_hz = 50000000,       // 50MHz最高性能
-    //     .frame_size = FRAMESIZE_QVGA      // 320x240分辨率
-    // };
-    
-    // 选择配置模式（这里使用全功能模式作为示例）
-    camera_user_config_t selected_config = full_config;
+    // 选择FPV模式配置
+    camera_user_config_t selected_config = fpv_config;
     
     // 设置摄像头配置
     if (!camera_set_config(&selected_config)) {
@@ -85,27 +76,45 @@ void app_main(void)
         return;
     }
     
-    ESP_LOGI("main", "Camera system started successfully!");
+    // 启动FPV模式（低延迟图传）
+    ESP_LOGI("main", "Starting FPV mode...");
+    if (!camera_start_fpv_mode()) {
+        ESP_LOGE("main", "Failed to start FPV mode");
+        return;
+    }
+    
+    ESP_LOGI("main", "FPV Camera system started successfully!");
     ESP_LOGI("main", "Current config: LCD=%d, FPS=%d, Capture=%d, Clock=%lu", 
                selected_config.enable_lcd_display,
                selected_config.enable_fps_monitor, 
                selected_config.enable_capture_task,
                selected_config.xclk_freq_hz);
     
+    // 获取WiFi信息用于显示
+    wifi_info_t wifi_info;
+    if (wifi_get_info(&wifi_info)) {
+        ESP_LOGI("main", "WiFi Info - SSID: %s, IP: " IPSTR ", Channel: %d", 
+                   wifi_info.ssid, IP2STR(&wifi_info.ip), wifi_info.channel);
+    }
+    
     // 主循环
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(5000));  // 每5秒输出一次状态
         
-        // 获取当前帧率
-        float cam_fps, lcd_fps;
-        if (camera_get_fps(&cam_fps, &lcd_fps)) {
-            ESP_LOGI("main", "Status - Camera FPS: %.1f, LCD FPS: %.1f", cam_fps, lcd_fps);
+        // 获取FPV传输统计信息
+        uint32_t frames_sent, packets_sent, bytes_sent;
+        float fps;
+        if (wifi_get_stats(&frames_sent, &packets_sent, &bytes_sent, &fps)) {
+            ESP_LOGI("main", "FPV Status - FPS: %.1f, Frames: %lu, Packets: %lu, Throughput: %.2f Mbps", 
+                       fps, frames_sent, packets_sent, (float)bytes_sent * 8 / 5000 / 1000000);
         }
         
-        // 这里可以添加配置切换逻辑
-        // 例如：通过串口命令切换到推流模式
-        // camera_set_config(&streaming_config);
-        // camera_stop();
-        // camera_start();
+        // 获取摄像头帧率（如果启用了监控）
+        if (selected_config.enable_fps_monitor) {
+            float cam_fps, lcd_fps;
+            if (camera_get_fps(&cam_fps, &lcd_fps)) {
+                ESP_LOGI("main", "Camera Status - Camera FPS: %.1f", cam_fps);
+            }
+        }
     }
 }

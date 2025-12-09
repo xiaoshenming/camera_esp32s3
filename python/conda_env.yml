@@ -1,0 +1,18 @@
+name: esp32_fpv
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.9
+  - pip
+  - numpy
+  - opencv
+  - pillow
+  - pip:
+    - --extra-index-url https://pypi.org/simple/
+    - flask
+    - cupy-cuda11x  # CUDA支持，根据CUDA版本选择
+    - websockets
+    - asyncio
+    - dataclasses
+    - typing-extensions
