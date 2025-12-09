@@ -66,10 +66,9 @@ bool camera_init(void)
     config.pin_pwdn = CAMERA_PIN_PWDN;
     config.pin_reset = CAMERA_PIN_RESET;
     config.xclk_freq_hz = XCLK_FREQ_HZ;
-    config.pixel_format = PIXFORMAT_RGB565;
-    config.frame_size = FRAMESIZE_QVGA;  // 改为320x240以匹配LCD屏幕分辨率
-    config.jpeg_quality = 12;
-    config.fb_count = 2;  // 增加帧缓冲区数量以支持更高分辨率
+    config.pixel_format = PIXFORMAT_RGB565;  // 使用原始RGB565格式
+    config.frame_size = FRAMESIZE_QVGA;      // 320x240分辨率匹配LCD屏幕
+    config.fb_count = 2;                     // 双缓冲提高显示性能
     config.fb_location = CAMERA_FB_IN_PSRAM;
     config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
 
